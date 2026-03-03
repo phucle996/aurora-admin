@@ -73,6 +73,7 @@ func NewModules(
 	}
 
 	apiKeySvc := apisvc.NewAPIKeyService(etcdClient, apisvc.APIKeyServiceConfig{
+		Prefix:         cfg.APIKey.Prefix,
 		RotateInterval: cfg.APIKey.RotateInterval,
 		OnBootstrap:    onBootstrap,
 		OnRotate:       onRotate,

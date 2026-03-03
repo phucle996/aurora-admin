@@ -24,10 +24,9 @@ func NewClient(cfg *config.EtcdCfg) (*clientv3.Client, error) {
 
 	logger.SysDebug(
 		"etcd.init",
-		"raw config endpoints=%v use_tls=%t sasl_enable=%t dial_timeout=%s keepalive_time=%s keepalive_timeout=%s",
+		"raw config endpoints=%v use_tls=%t dial_timeout=%s keepalive_time=%s keepalive_timeout=%s",
 		cfg.Endpoints,
 		cfg.UseTLS,
-		cfg.SASLEnable,
 		cfg.DialTimeout,
 		cfg.DialKeepAliveTime,
 		cfg.DialKeepAliveTimeout,
@@ -48,11 +47,9 @@ func NewClient(cfg *config.EtcdCfg) (*clientv3.Client, error) {
 	}
 	logger.SysDebug(
 		"etcd.auth",
-		"auth resolved username_set=%t password_set=%t sasl_enable=%t sasl_mechanism=%q",
+		"auth resolved username_set=%t password_set=%t",
 		strings.TrimSpace(username) != "",
 		strings.TrimSpace(password) != "",
-		cfg.SASLEnable,
-		strings.ToUpper(strings.TrimSpace(cfg.SASLMechanism)),
 	)
 
 	tlsCfg, err := buildTLSConfig(cfg)
@@ -148,22 +145,6 @@ func sanitizeEndpoints(endpoints []string) []string {
 func resolveAuth(cfg *config.EtcdCfg) (string, string, error) {
 	username := strings.TrimSpace(cfg.Username)
 	password := cfg.Password
-
-	if cfg.SASLEnable {
-		mechanism := strings.ToUpper(strings.TrimSpace(cfg.SASLMechanism))
-		if mechanism == "" {
-			mechanism = "PLAIN"
-		}
-		if mechanism != "PLAIN" {
-			return "", "", fmt.Errorf("unsupported etcd sasl mechanism: %s", mechanism)
-		}
-		if username == "" {
-			username = strings.TrimSpace(cfg.SASLUsername)
-		}
-		if password == "" {
-			password = cfg.SASLPassword
-		}
-	}
 
 	if username == "" && strings.TrimSpace(password) != "" {
 		return "", "", errors.New("etcd username is required when password is provided")

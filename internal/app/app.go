@@ -80,11 +80,8 @@ func NewApplication(cfg *config.Config) (*App, error) {
 }
 
 func (a *App) Start(cfg *config.Config) error {
-	httpHost := cfg.App.Host
-	httpAddr := fmt.Sprintf("%s:%d", httpHost, cfg.App.Port)
-	if httpHost == "" {
-		httpAddr = fmt.Sprintf(":%d", cfg.App.Port)
-	}
+
+	httpAddr := fmt.Sprintf(":%d", cfg.App.Port)
 
 	ln, err := net.Listen("tcp", httpAddr)
 	if err != nil {
