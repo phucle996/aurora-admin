@@ -1,0 +1,27 @@
+package app
+
+import (
+	"admin/internal/transport/http/handler"
+	"admin/internal/transport/http/middleware"
+
+	"github.com/gin-gonic/gin"
+)
+
+// RegisterRoutes wires HTTP routes to handlers.
+func RegisterRoutes(r *gin.Engine, m *Modules,
+	health *handler.HealthHandler,
+	apiKey *handler.APIKeyHandler,
+) {
+
+	r.GET("/health/liveness", health.Liveness)
+	r.GET("/health/readiness", health.Readiness)
+	r.GET("/health/startup", health.Startup)
+
+	adminAPIKeyAuth := middleware.AuthAdminAPIKey(m.APIKeySvc)
+
+	api := r.Group("/api/v1")
+	{
+		api.POST("/apikey/login", apiKey.Login)
+		api.POST("/apikey/rotate", adminAPIKeyAuth, apiKey.Rotate)
+	}
+}

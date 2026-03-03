@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1.7
+
+FROM node:24-alpine AS frontend-builder
+WORKDIR /frontend
+
+COPY package*.json ./
+RUN npm ci --no-fund --no-audit
+
+COPY . .
+RUN npm run build
+
+FROM golang:1.26-alpine AS backend-builder
+WORKDIR /app
+
+RUN apk add --no-cache git build-base
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+COPY --from=frontend-builder /frontend/dist ./dist
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /app/bin/admin-server ./cmd/server
+
+FROM alpine:3.21 AS runner
+WORKDIR /app
+
+RUN apk add --no-cache ca-certificates tzdata
+
+COPY --from=backend-builder /app/bin/admin-server /app/server
+COPY --from=backend-builder /app/dist /app/dist
+
+EXPOSE 3009
+
+ENTRYPOINT ["/app/server"]

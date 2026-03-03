@@ -1,0 +1,14 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/admin-server ./cmd/server"
+  bin = "tmp/admin-server"
+  include_ext = ["go", "mod", "sum", "yaml", "yml", "json", "env"]
+  exclude_dir = ["tmp", "vendor", ".git", "node_modules"]
+  delay = 1000
+  send_interrupt = true
+  kill_delay = 500
+
+[log]
+  time = true
