@@ -30,6 +30,8 @@ RUN apk add --no-cache ca-certificates tzdata
 COPY --from=backend-builder /app/bin/admin-server /app/server
 COPY --from=backend-builder /app/dist /app/dist
 
-EXPOSE 3009
+USER nonroot:nonroot
+
+EXPOSE 3000
 
 ENTRYPOINT ["/app/server"]

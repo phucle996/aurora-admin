@@ -1,4 +1,4 @@
-FROM golang:1.25-alpine
+FROM golang:1.26-alpine
 
 WORKDIR /app
 
@@ -10,6 +10,8 @@ RUN go mod download
 
 COPY . .
 
-EXPOSE 3009
+USER nonroot:nonroot
+
+EXPOSE 3000
 
 CMD ["air", "-c", ".air.toml"]
