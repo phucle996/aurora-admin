@@ -2,29 +2,33 @@ package app
 
 import (
 	"admin/pkg/logger"
+	"embed"
+	"io/fs"
+	"mime"
 	"net/http"
-	"os"
-	"path/filepath"
+	"path"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 )
 
-const FrontendDistDir = "./dist"
+const frontendDistDir = "dist"
+const frontendIndexPath = frontendDistDir + "/index.html"
+
+//go:embed all:dist
+var frontendEmbedFS embed.FS
 
 func RegisterFrontendSPA(r *gin.Engine) {
-
-	indexPath := filepath.Join(FrontendDistDir, "index.html")
-	if _, err := os.Stat(indexPath); err != nil {
-		logger.SysWarn("frontend.serve", "skip serving frontend: %s not found (%v)", indexPath, err)
+	if _, err := fs.Stat(frontendEmbedFS, frontendIndexPath); err != nil {
+		logger.SysWarn("frontend.serve", "skip serving embedded frontend: %s not found (%v)", frontendIndexPath, err)
 		return
 	}
 
-	logger.SysInfo("frontend.serve", "serving frontend from %s", FrontendDistDir)
+	logger.SysInfo("frontend.serve", "serving embedded frontend from %s", frontendDistDir)
 
 	r.NoRoute(func(c *gin.Context) {
-		path := c.Request.URL.Path
-		if isBackendRoute(path) {
+		requestPath := c.Request.URL.Path
+		if isBackendRoute(requestPath) {
 			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{
 				"error":   "not_found",
 				"message": "route not found",
@@ -39,19 +43,36 @@ func RegisterFrontendSPA(r *gin.Engine) {
 			return
 		}
 
-		relativePath := strings.TrimPrefix(path, "/")
+		relativePath := strings.TrimPrefix(path.Clean(requestPath), "/")
+		if relativePath == "." {
+			relativePath = ""
+		}
 		if relativePath != "" {
-			clean := filepath.Clean(relativePath)
-			if !strings.HasPrefix(clean, "..") {
-				targetPath := filepath.Join(FrontendDistDir, clean)
-				if info, err := os.Stat(targetPath); err == nil && !info.IsDir() {
-					c.File(targetPath)
-					return
+			if !strings.HasPrefix(relativePath, "..") {
+				targetPath := path.Join(frontendDistDir, relativePath)
+				if stat, err := fs.Stat(frontendEmbedFS, targetPath); err == nil && !stat.IsDir() {
+					contentType := mime.TypeByExtension(path.Ext(targetPath))
+					if contentType == "" {
+						contentType = "application/octet-stream"
+					}
+					payload, err := fs.ReadFile(frontendEmbedFS, targetPath)
+					if err == nil {
+						c.Data(http.StatusOK, contentType, payload)
+						return
+					}
 				}
 			}
 		}
 
-		c.File(indexPath)
+		indexPayload, err := fs.ReadFile(frontendEmbedFS, frontendIndexPath)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+				"error":   "frontend_unavailable",
+				"message": "frontend index not found",
+			})
+			return
+		}
+		c.Data(http.StatusOK, "text/html; charset=utf-8", indexPayload)
 	})
 }
 

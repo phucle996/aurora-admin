@@ -18,7 +18,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-COPY --from=frontend-builder /frontend/dist ./dist
+COPY --from=frontend-builder /frontend/internal/app/dist ./internal/app/dist
 
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /app/bin/admin-server ./cmd/server
 

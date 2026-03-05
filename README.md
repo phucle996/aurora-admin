@@ -4,7 +4,7 @@ Admin service for Aurora platform.
 
 This repository contains:
 - Go backend (`cmd/server`) with HTTP + gRPC (h2c) transport.
-- React/Vite admin UI (`src`) served by backend from `dist/`.
+- React/Vite admin UI (`src`) embedded into Go binary via `go:embed`.
 - Runtime config bootstrap to etcd (`/runtime`, `/shared/cors`, `/endpoint/admin`).
 
 ## Main Features
@@ -13,7 +13,7 @@ This repository contains:
 - Token secret management and rotation.
 - Certificate store transport (gRPC).
 - Module status endpoint from etcd endpoint registry.
-- SPA admin UI bundled into the backend binary runtime.
+- SPA admin UI bundled into the backend binary runtime (`internal/app/dist`).
 
 ## Tech Stack
 
@@ -81,6 +81,8 @@ go run ./cmd/server
 ```
 
 Default listen port is from `APP_PORT` (current default: `3009`).
+
+Note: `npm run build` outputs assets to `internal/app/dist`, and backend embeds this folder at build time.
 
 ## Useful Commands
 
@@ -150,6 +152,7 @@ Notes:
 - Installer can download release binaries from:
   - `https://github.com/phucle996/aurora-admin/releases`
 - Installed systemd unit: `aurora-admin.service`.
+- UI is already embedded in backend binary, no separate `dist` deployment step.
 
 ## Release Pipeline
 

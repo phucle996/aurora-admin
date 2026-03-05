@@ -7,6 +7,8 @@ import { defineConfig } from "vite";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   build: {
+    outDir: "internal/app/dist",
+    emptyOutDir: false,
     rollupOptions: {
       output: {
         manualChunks(id) {

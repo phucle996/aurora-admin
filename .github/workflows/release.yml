@@ -27,6 +27,18 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build frontend bundle (embedded)
+        run: npm run build
+
       - name: Run tests
         run: go test ./...
 
@@ -99,4 +111,3 @@ jobs:
             dist/checksums.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
