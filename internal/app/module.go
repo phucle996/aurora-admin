@@ -23,6 +23,7 @@ type Modules struct {
 	TokenSecretSvc   *apisvc.TokenSecretService
 	CertStoreSvc     *apisvc.CertStoreService
 	EnabledModuleSvc *apisvc.EnabledModuleService
+	ModuleInstallSvc *apisvc.ModuleInstallService
 }
 
 // NewModules assembles all infrastructure dependencies.
@@ -96,7 +97,9 @@ func NewModules(
 	})
 
 	enabledModuleRepo := repository.NewEtcdEndpointRepository(etcdClient, "/endpoint/")
+	runtimeRepo := repository.NewEtcdRuntimeConfigRepository(etcdClient, "/runtime")
 	enabledModuleSvc := apisvc.NewEnabledModuleService(enabledModuleRepo)
+	moduleInstallSvc := apisvc.NewModuleInstallService(enabledModuleRepo, runtimeRepo, cfg.Database.URL)
 
 	return &Modules{
 		Etcd:             etcdClient,
@@ -104,5 +107,6 @@ func NewModules(
 		TokenSecretSvc:   tokenSecretSvc,
 		CertStoreSvc:     certStoreSvc,
 		EnabledModuleSvc: enabledModuleSvc,
+		ModuleInstallSvc: moduleInstallSvc,
 	}, nil
 }

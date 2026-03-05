@@ -26,5 +26,6 @@ func RegisterRoutes(r *gin.Engine, m *Modules,
 		api.POST("/apikey/rotate", adminAPIKeyAuth, apiKey.Rotate)
 		api.GET("/modules/enabled", adminAPIKeyAuth, enabledModule.List)
 		api.GET("/modules/status", adminAPIKeyAuth, enabledModule.Status)
+		api.POST("/modules/install", adminAPIKeyAuth, enabledModule.Install)
 	}
 }

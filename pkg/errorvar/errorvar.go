@@ -4,11 +4,17 @@ import "errors"
 
 var (
 	// Repository layer
-	ErrEndpointRepositoryNil  = errors.New("endpoint repository is nil")
-	ErrCertStoreRepositoryNil = errors.New("cert store repository is nil")
+	ErrEndpointRepositoryNil      = errors.New("endpoint repository is nil")
+	ErrEndpointNameInvalid        = errors.New("endpoint name is invalid")
+	ErrCertStoreRepositoryNil     = errors.New("cert store repository is nil")
+	ErrRuntimeConfigRepositoryNil = errors.New("runtime config repository is nil")
+	ErrRuntimeConfigKeyInvalid    = errors.New("runtime config key is invalid")
 
 	// Service layer - enabled modules
 	ErrEnabledModuleServiceNil = errors.New("enabled module service is nil")
+	ErrModuleInstallServiceNil = errors.New("module install service is nil")
+	ErrModuleNameInvalid       = errors.New("module name is invalid")
+	ErrModuleInstallScope      = errors.New("module install scope is invalid")
 
 	// Service layer - api key
 	ErrAPIKeyServiceNil    = errors.New("api key service is nil")

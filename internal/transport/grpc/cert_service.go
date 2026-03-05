@@ -11,30 +11,26 @@ import (
 	gogrpc "google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 const (
 	certServiceName      = "admin.transport.cert.v1.CertService"
 	certUploadMethodName = "UploadCert"
 	certUploadMethodPath = "/" + certServiceName + "/" + certUploadMethodName
+
+	certFieldObjectID = "object_id"
+	certFieldCertType = "cert_type"
+	certFieldContent  = "content"
+	certFieldKey      = "key"
 )
-
-type UploadCertRequest struct {
-	ObjectID string `json:"object_id"`
-	CertType string `json:"cert_type"`
-	Content  string `json:"content"`
-}
-
-type UploadCertResponse struct {
-	Key string `json:"key"`
-}
 
 type CertTransportService struct {
 	certStore *service.CertStoreService
 }
 
 type certTransportServer interface {
-	UploadCert(context.Context, *UploadCertRequest) (*UploadCertResponse, error)
+	UploadCert(context.Context, *structpb.Struct) (*structpb.Struct, error)
 }
 
 func NewCertTransportService(certStore *service.CertStoreService) *CertTransportService {
@@ -43,8 +39,8 @@ func NewCertTransportService(certStore *service.CertStoreService) *CertTransport
 
 func (s *CertTransportService) UploadCert(
 	ctx context.Context,
-	req *UploadCertRequest,
-) (*UploadCertResponse, error) {
+	req *structpb.Struct,
+) (*structpb.Struct, error) {
 	if s == nil || s.certStore == nil {
 		return nil, status.Error(codes.Unavailable, "cert store service unavailable")
 	}
@@ -52,12 +48,15 @@ func (s *CertTransportService) UploadCert(
 		return nil, status.Error(codes.InvalidArgument, "request is nil")
 	}
 
-	objectID, err := uuid.Parse(strings.TrimSpace(req.ObjectID))
+	objectID, err := uuid.Parse(strings.TrimSpace(readStringField(req, certFieldObjectID)))
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid object_id")
 	}
 
-	key, err := s.certStore.UploadCert(ctx, objectID, req.CertType, req.Content)
+	certType := readStringField(req, certFieldCertType)
+	content := readStringField(req, certFieldContent)
+
+	key, err := s.certStore.UploadCert(ctx, objectID, certType, content)
 	if err != nil {
 		switch {
 		case errors.Is(err, errorvar.ErrCertTypeInvalid),
@@ -70,7 +69,14 @@ func (s *CertTransportService) UploadCert(
 		}
 	}
 
-	return &UploadCertResponse{Key: key}, nil
+	payload, err := structpb.NewStruct(map[string]any{
+		certFieldKey: key,
+	})
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to build grpc response payload")
+	}
+
+	return payload, nil
 }
 
 func RegisterCertTransportServer(server *gogrpc.Server, svc *CertTransportService) {
@@ -97,20 +103,33 @@ func certUploadHandler(
 	dec func(interface{}) error,
 	interceptor gogrpc.UnaryServerInterceptor,
 ) (interface{}, error) {
-	in := new(UploadCertRequest)
+	in := &structpb.Struct{}
 	if err := dec(in); err != nil {
 		return nil, err
 	}
+
 	base := srv.(*CertTransportService)
 	if interceptor == nil {
 		return base.UploadCert(ctx, in)
 	}
+
 	info := &gogrpc.UnaryServerInfo{
 		Server:     srv,
 		FullMethod: certUploadMethodPath,
 	}
 	handler := func(currentCtx context.Context, req interface{}) (interface{}, error) {
-		return base.UploadCert(currentCtx, req.(*UploadCertRequest))
+		return base.UploadCert(currentCtx, req.(*structpb.Struct))
 	}
 	return interceptor(ctx, in, info, handler)
+}
+
+func readStringField(req *structpb.Struct, key string) string {
+	if req == nil {
+		return ""
+	}
+	field, ok := req.GetFields()[key]
+	if !ok || field == nil {
+		return ""
+	}
+	return strings.TrimSpace(field.GetStringValue())
 }

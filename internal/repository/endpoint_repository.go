@@ -15,6 +15,7 @@ type EndpointKV struct {
 
 type EndpointRepository interface {
 	List(ctx context.Context) ([]EndpointKV, error)
+	Upsert(ctx context.Context, name string, value string) error
 }
 
 type EtcdEndpointRepository struct {
@@ -53,4 +54,19 @@ func (r *EtcdEndpointRepository) List(ctx context.Context) ([]EndpointKV, error)
 		})
 	}
 	return items, nil
+}
+
+func (r *EtcdEndpointRepository) Upsert(ctx context.Context, name string, value string) error {
+	if r == nil || r.etcd == nil {
+		return errorvar.ErrEndpointRepositoryNil
+	}
+
+	trimmedName := strings.Trim(strings.TrimSpace(name), "/")
+	if trimmedName == "" {
+		return errorvar.ErrEndpointNameInvalid
+	}
+
+	fullKey := strings.TrimRight(strings.TrimSpace(r.prefix), "/") + "/" + trimmedName
+	_, err := r.etcd.Put(ctx, fullKey, strings.TrimSpace(value))
+	return err
 }
