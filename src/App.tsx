@@ -1,9 +1,13 @@
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, type ReactNode } from "react";
 import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 
 import AdminLayout from "@/layout/admin-layout";
 import { Toaster } from "@/components/ui/sonner";
 import { hasAdminSession } from "@/lib/admin-auth";
+import {
+  useEnabledModules,
+  type ModuleFeature,
+} from "@/state/enabled-modules-context";
 
 import "./App.css";
 
@@ -37,6 +41,29 @@ function LoginRoute() {
   return <LoginPage />;
 }
 
+function RequireEnabledFeature({
+  feature,
+  children,
+}: {
+  feature: ModuleFeature;
+  children: ReactNode;
+}) {
+  const { items, status, isFeatureEnabled } = useEnabledModules();
+
+  if (status === "idle" || status === "loading") {
+    if (items.length === 0) {
+      return <RouteFallback />;
+    }
+    return <>{children}</>;
+  }
+
+  if (!isFeatureEnabled(feature)) {
+    return <Navigate to="/module" replace />;
+  }
+
+  return <>{children}</>;
+}
+
 function App() {
   return (
     <>
@@ -47,18 +74,43 @@ function App() {
           <Route element={<RequireAdminSession />}>
             <Route element={<AdminLayout />}>
               <Route path="/dashboard" element={<DashboardPage />} />
-              <Route path="/hypervisor/kvm">
+              <Route
+                path="/hypervisor/kvm"
+                element={
+                  <RequireEnabledFeature feature="kvm">
+                    <Outlet />
+                  </RequireEnabledFeature>
+                }
+              >
                 <Route index element={<KvmPage />} />
                 <Route path="new" element={<NewKvmPage />} />
                 <Route path=":nodeId/*" element={<KvmDetailPage />} />
               </Route>
-              <Route path="/containers/docker" element={<DockerPage />} />
-              <Route path="/orchestration/k8s" element={<K8sPage />} />
+              <Route
+                path="/containers/docker"
+                element={
+                  <RequireEnabledFeature feature="docker">
+                    <DockerPage />
+                  </RequireEnabledFeature>
+                }
+              />
+              <Route
+                path="/orchestration/k8s"
+                element={
+                  <RequireEnabledFeature feature="k8s">
+                    <K8sPage />
+                  </RequireEnabledFeature>
+                }
+              />
               <Route path="/module" element={<ModulePage />} />
               <Route path="/settings" element={<AdminSettingsPage />} />
               <Route
                 path="/vms"
-                element={<Navigate to="/hypervisor/kvm" replace />}
+                element={
+                  <RequireEnabledFeature feature="kvm">
+                    <Navigate to="/hypervisor/kvm" replace />
+                  </RequireEnabledFeature>
+                }
               />
             </Route>
           </Route>

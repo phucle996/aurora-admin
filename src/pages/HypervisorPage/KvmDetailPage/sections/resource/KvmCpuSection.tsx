@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 
 import {
@@ -72,24 +72,27 @@ export function KvmCpuSection({
   const [selectedMetricKey, setSelectedMetricKey] =
     useState<KvmCpuMetricKey>("cpuUsagePct");
 
-  const selectedMetric = useMemo(
+  const hasAnyData = useMemo(
     () =>
-      CPU_METRICS.find((item) => item.key === selectedMetricKey) ??
-      CPU_METRICS[0],
-    [selectedMetricKey],
+      samples.some((sample) =>
+        CPU_METRICS.some((metricDef) => {
+          const value = sample[metricDef.key];
+          return typeof value === "number" && Number.isFinite(value);
+        }),
+      ),
+    [samples],
   );
 
-  useEffect(() => {
-    const hasAnyData = samples.some((sample) =>
-      CPU_METRICS.some((metricDef) => {
-        const value = sample[metricDef.key];
-        return typeof value === "number" && Number.isFinite(value);
-      }),
-    );
-    if (!hasAnyData) {
-      setSelectedMetricKey("cpuUsagePct");
-    }
-  }, [samples]);
+  const effectiveMetricKey: KvmCpuMetricKey = hasAnyData
+    ? selectedMetricKey
+    : "cpuUsagePct";
+
+  const selectedMetric = useMemo(
+    () =>
+      CPU_METRICS.find((item) => item.key === effectiveMetricKey) ??
+      CPU_METRICS[0],
+    [effectiveMetricKey],
+  );
 
   const latestSample = samples.length > 0 ? samples[samples.length - 1] : null;
   const cpuModelDescription = useMemo(() => {

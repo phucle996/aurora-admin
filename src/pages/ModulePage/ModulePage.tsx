@@ -1,5 +1,12 @@
-import { useMemo, useState } from "react";
-import { Copy, Download, Layers, PackageCheck } from "lucide-react";
+import { useEffect, useMemo, useRef } from "react";
+import {
+  CheckCircle2,
+  Layers,
+  Server,
+  Settings,
+  XCircle,
+  type LucideIcon,
+} from "lucide-react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 
@@ -13,106 +20,187 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import {
+  useEnabledModules,
+  type EnabledModuleItem,
+} from "@/state/enabled-modules-context";
 
-type ModuleItem = {
+type ModuleCatalogItem = {
   id: string;
-  name: string;
-  type: "service" | "agent" | "frontend";
-  runtime: string;
+  label: string;
   description: string;
-  dependencies: string[];
-  installCommand: string;
+  icon: LucideIcon;
+  aliases: string[];
 };
 
-const moduleCatalog: ModuleItem[] = [
+type ModuleStatusCard = ModuleCatalogItem & {
+  state: "installed" | "not_installed";
+  runtimeStatus: string;
+  endpoint: string;
+  sourceName: string;
+};
+
+const moduleCatalog: ModuleCatalogItem[] = [
+  {
+    id: "vm",
+    label: "Virtual Machine",
+    description: "Quản lý hypervisor KVM, VM lifecycle và node metrics.",
+    icon: Server,
+    aliases: ["vm", "vm-service", "kvm", "hypervisor", "libvirt"],
+  },
+  {
+    id: "docker",
+    label: "Docker Runtime",
+    description: "Quản lý container runtime và workload Docker.",
+    icon: Layers,
+    aliases: ["docker"],
+  },
+  {
+    id: "k8s",
+    label: "Kubernetes",
+    description: "Orchestration cluster và workload trên Kubernetes.",
+    icon: Layers,
+    aliases: ["k8s", "kubernetes"],
+  },
   {
     id: "ums",
-    name: "UserManagementSystem",
-    type: "service",
-    runtime: "Go + PostgreSQL + Redis + ETCD",
-    description: "Auth/RBAC trung tâm cho toàn bộ platform.",
-    dependencies: ["PostgreSQL", "Redis", "ETCD"],
-    installCommand: "cd UserManagmentSystem && go run cmd/server/main.go",
+    label: "User Management",
+    description: "Xác thực, phân quyền và quản lý user/service account.",
+    icon: Settings,
+    aliases: ["ums", "user", "usermanagment", "user-management"],
   },
   {
-    id: "vm-service",
-    name: "VM Service",
-    type: "service",
-    runtime: "Go + PostgreSQL + Redis + VictoriaMetrics",
-    description: "Quản lý hypervisor, node, VM instances và metrics.",
-    dependencies: ["PostgreSQL", "Redis", "VictoriaMetrics"],
-    installCommand: "cd vm-service && go run cmd/server/main.go",
+    id: "mail",
+    label: "Mail Service",
+    description: "Gửi email, template và luồng notification.",
+    icon: Settings,
+    aliases: ["mail", "smtp"],
   },
   {
-    id: "vm-agent",
-    name: "VM Agent",
-    type: "agent",
-    runtime: "Go daemon",
-    description: "Agent chạy trên node để đồng bộ trạng thái hạ tầng.",
-    dependencies: ["Node access", "Network"],
-    installCommand: "cd vm-agent && go run cmd/agent/main.go",
+    id: "admin",
+    label: "Admin Service",
+    description: "Quản trị API key, token secret và service bootstrap.",
+    icon: Settings,
+    aliases: ["admin", "admin-service"],
   },
   {
-    id: "mail-service",
-    name: "Mail Service",
-    type: "service",
-    runtime: "Go + PostgreSQL + Redis + ETCD",
-    description: "Quản lý SMTP profile, template, consumer, email history.",
-    dependencies: ["PostgreSQL", "Redis", "ETCD"],
-    installCommand: "cd mail-service && go run cmd/server/main.go",
+    id: "gateway",
+    label: "Gateway",
+    description: "Entry point route và TLS termination cho toàn hệ thống.",
+    icon: Layers,
+    aliases: ["gateway", "nginx", "proxy"],
   },
   {
-    id: "admin-ui",
-    name: "Admin UI",
-    type: "frontend",
-    runtime: "React + Vite",
-    description: "Giao diện điều phối và quản trị hệ sinh thái dịch vụ.",
-    dependencies: ["Admin API"],
-    installCommand: "cd Admin && npm install && npm run dev",
+    id: "monitoring",
+    label: "Monitoring",
+    description: "Thu thập và lưu trữ metrics/telemetry toàn cụm.",
+    icon: Layers,
+    aliases: ["monitor", "metrics", "victoria", "prometheus"],
   },
 ];
 
-const typeLabel: Record<ModuleItem["type"], string> = {
-  service: "Service",
-  agent: "Agent",
-  frontend: "Frontend",
-};
+function normalizeText(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function prettifyName(value: string): string {
+  return value
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatStatusLabel(status: string): string {
+  return status
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function buildModuleStatusCards(items: EnabledModuleItem[]): ModuleStatusCard[] {
+  const usedIndexes = new Set<number>();
+
+  const mapped = moduleCatalog.map<ModuleStatusCard>((catalogItem) => {
+    let matchedItem: EnabledModuleItem | null = null;
+
+    for (let idx = 0; idx < items.length; idx += 1) {
+      if (usedIndexes.has(idx)) continue;
+
+      const candidate = items[idx];
+      const text = normalizeText(`${candidate.name} ${candidate.endpoint}`);
+
+      const matched = catalogItem.aliases.some((alias) =>
+        text.includes(normalizeText(alias)),
+      );
+
+      if (!matched) continue;
+
+      matchedItem = candidate;
+      usedIndexes.add(idx);
+      break;
+    }
+
+    const installed = Boolean(matchedItem?.installed || matchedItem?.endpoint);
+    return {
+      ...catalogItem,
+      state: installed ? "installed" : "not_installed",
+      runtimeStatus: matchedItem?.status || (installed ? "installed" : "not_installed"),
+      endpoint: matchedItem?.endpoint || "",
+      sourceName: matchedItem?.name || "",
+    };
+  });
+
+  const discovered = items.flatMap<ModuleStatusCard>((item, idx) => {
+    if (usedIndexes.has(idx)) return [];
+
+    return [
+      {
+        id: `detected-${item.name}-${idx}`,
+        label: prettifyName(item.name),
+        description: "Module phát hiện từ endpoint registry.",
+        icon: Layers,
+        aliases: [],
+        state: item.installed ? "installed" : "not_installed",
+        runtimeStatus: item.status || (item.installed ? "installed" : "not_installed"),
+        endpoint: item.endpoint,
+        sourceName: item.name,
+      },
+    ];
+  });
+
+  return [...mapped, ...discovered];
+}
 
 export default function ModulePage() {
   const { resolvedTheme } = useTheme();
-  const [installing, setInstalling] = useState<Record<string, boolean>>({});
-  const [installed, setInstalled] = useState<Record<string, boolean>>({});
+  const { items, status, error, lastFetchedAt, refreshModules } = useEnabledModules();
+  const syncedOnMountRef = useRef(false);
 
   const isDark = resolvedTheme !== "light";
+
   const panelClass = isDark
     ? "border-white/10 bg-slate-950/60"
     : "border-black/10 bg-white/85";
+
   const textPrimary = isDark ? "text-white" : "text-slate-900";
   const textMuted = isDark ? "text-slate-300" : "text-slate-600";
 
-  const installedCount = useMemo(
-    () => Object.values(installed).filter(Boolean).length,
-    [installed],
-  );
+  const cards = useMemo(() => buildModuleStatusCards(items), [items]);
 
-  const copyCommand = async (command: string) => {
-    try {
-      await navigator.clipboard.writeText(command);
-      toast.success("Đã copy install command");
-    } catch {
-      toast.error("Không thể copy command");
+  useEffect(() => {
+    if (syncedOnMountRef.current) {
+      return;
     }
-  };
+    syncedOnMountRef.current = true;
+    void refreshModules({ force: true }).catch(() => {
+      toast.error("Không thể tải module status từ API");
+    });
+  }, [refreshModules]);
 
-  const installModule = async (mod: ModuleItem) => {
-    setInstalling((prev) => ({ ...prev, [mod.id]: true }));
-    try {
-      await new Promise((resolve) => setTimeout(resolve, 900));
-      setInstalled((prev) => ({ ...prev, [mod.id]: true }));
-      toast.success(`Đã đánh dấu install: ${mod.name}`);
-    } finally {
-      setInstalling((prev) => ({ ...prev, [mod.id]: false }));
-    }
+  const handleMockAction = (action: string, moduleLabel: string) => {
+    toast.info(`${action} cho module "${moduleLabel}" đang ở chế độ mock UI.`);
   };
 
   return (
@@ -128,133 +216,173 @@ export default function ModulePage() {
                 : "bg-white/70",
             )}
           >
-            Module Catalog
+            Module Status
           </Badge>
+
           <h1
-            className={cn("text-3xl font-semibold tracking-tight", textPrimary)}
+            className={cn(
+              "text-3xl font-semibold tracking-tight",
+              textPrimary,
+            )}
           >
-            Service Modules & Install
+            Runtime Module Status Board
           </h1>
+
           <p className={cn("text-sm", textMuted)}>
-            Danh mục module vận hành và command cài đặt nhanh cho từng service.
+            Danh sách module lấy từ endpoint registry và hiển thị trạng thái
+            cài đặt.
           </p>
+
+          <p className={cn("text-xs", textMuted)}>
+            API status: {status}
+            {lastFetchedAt > 0
+              ? ` • cập nhật lúc ${new Date(lastFetchedAt).toLocaleString()}`
+              : ""}
+          </p>
+
+          {error ? (
+            <p className="text-xs text-rose-400">{error}</p>
+          ) : null}
         </div>
+
       </header>
 
-      <section className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
-        {moduleCatalog.map((mod) => {
-          const isInstalling = installing[mod.id] === true;
-          const isInstalled = installed[mod.id] === true;
+      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {cards.map((item) => {
+          const Icon = item.icon;
+          const installed = item.state === "installed";
 
           return (
             <Card
-              key={mod.id}
-              className={cn("shadow-lg backdrop-blur-xl", panelClass)}
+              key={item.id}
+              className={cn(
+                "shadow-lg",
+                panelClass,
+                installed
+                  ? isDark
+                    ? "border-emerald-400/20"
+                    : "border-emerald-500/30"
+                  : isDark
+                    ? "border-slate-500/30"
+                    : "border-slate-300",
+              )}
             >
-              <CardHeader className="space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <CardTitle className={cn("text-lg", textPrimary)}>
-                    {mod.name}
-                  </CardTitle>
+              <CardHeader className="pb-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <div
+                      className={cn(
+                        "rounded-lg border p-2",
+                        isDark
+                          ? "border-white/20 bg-white/5"
+                          : "border-slate-300 bg-slate-50",
+                      )}
+                    >
+                      <Icon className={cn("h-5 w-5", textPrimary)} />
+                    </div>
+
+                    <div className="min-w-0">
+                      <CardTitle
+                        className={cn("truncate text-base", textPrimary)}
+                      >
+                        {item.label}
+                      </CardTitle>
+                    </div>
+                  </div>
+
                   <Badge
                     variant="outline"
                     className={cn(
-                      isDark
-                        ? "border-white/20 text-slate-200"
-                        : "text-slate-700",
+                      installed
+                        ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+                        : "border-slate-500/30 bg-slate-500/10 text-slate-400",
                     )}
                   >
-                    {typeLabel[mod.type]}
+                    {installed ? "Đã cài" : "Chưa cài"}
                   </Badge>
                 </div>
-                <CardDescription className={textMuted}>
-                  {mod.description}
+
+                <CardDescription className={cn("pt-1 text-sm", textMuted)}>
+                  {item.description}
                 </CardDescription>
               </CardHeader>
 
-              <CardContent className="space-y-4">
-                <div className="space-y-1">
-                  <p
-                    className={cn(
-                      "text-xs uppercase tracking-[0.1em]",
-                      textMuted,
-                    )}
-                  >
-                    Runtime
-                  </p>
-                  <p className={cn("text-sm", textPrimary)}>{mod.runtime}</p>
-                </div>
-
-                <div className="space-y-2">
-                  <p
-                    className={cn(
-                      "text-xs uppercase tracking-[0.1em]",
-                      textMuted,
-                    )}
-                  >
-                    Dependencies
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {mod.dependencies.map((dep) => (
-                      <Badge
-                        key={dep}
-                        variant="secondary"
-                        className={cn(
-                          "rounded-full",
-                          isDark
-                            ? "bg-white/10 text-slate-100"
-                            : "bg-slate-100 text-slate-700",
-                        )}
-                      >
-                        {dep}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-
+              <CardContent className="space-y-3">
                 <div
                   className={cn(
-                    "rounded-xl border p-2 text-xs",
+                    "rounded-lg border px-3 py-2",
                     isDark
-                      ? "border-white/10 bg-black/20 text-slate-200"
-                      : "border-slate-200 bg-slate-50 text-slate-700",
+                      ? "border-white/10 bg-white/5"
+                      : "border-slate-200 bg-slate-50/70",
                   )}
                 >
-                  <code className="break-all">{mod.installCommand}</code>
+                  <p className={cn("text-[11px] uppercase", textMuted)}>Endpoint</p>
+                  <p className={cn("truncate text-sm", textPrimary)}>
+                    {item.endpoint || "Chưa có endpoint"}
+                  </p>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <Button
-                    type="button"
-                    variant={isInstalled ? "secondary" : "default"}
-                    className={cn(
-                      "flex-1 gap-2",
-                      isInstalled && "text-emerald-700 dark:text-emerald-200",
-                    )}
-                    onClick={() => installModule(mod)}
-                    disabled={isInstalling || isInstalled}
-                  >
-                    {isInstalled ? (
-                      <PackageCheck className="h-4 w-4" />
-                    ) : (
-                      <Download className="h-4 w-4" />
-                    )}
-                    {isInstalling
-                      ? "Installing..."
-                      : isInstalled
-                        ? "Installed"
-                        : "Install"}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    onClick={() => copyCommand(mod.installCommand)}
-                    title="Copy install command"
-                  >
-                    <Copy className="h-4 w-4" />
-                  </Button>
-                </div>
+                {installed ? (
+                  <>
+                    <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-medium text-emerald-400">
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      {formatStatusLabel(item.runtimeStatus)}
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-2 pt-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          handleMockAction("Healthcheck", item.label)
+                        }
+                      >
+                        Health
+                      </Button>
+
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleMockAction("Stop", item.label)}
+                      >
+                        Stop
+                      </Button>
+
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleMockAction("Update", item.label)}
+                      >
+                        Update
+                      </Button>
+
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() =>
+                          handleMockAction("Uninstall", item.label)
+                        }
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="inline-flex items-center gap-1.5 rounded-full bg-slate-500/15 px-2.5 py-1 text-xs font-medium text-slate-400">
+                      <XCircle className="h-3.5 w-3.5" />
+                      Chưa cài
+                    </div>
+
+                    <Button
+                      className="w-full"
+                      size="sm"
+                      onClick={() => handleMockAction("Install", item.label)}
+                    >
+                      Install
+                    </Button>
+                  </>
+                )}
               </CardContent>
             </Card>
           );

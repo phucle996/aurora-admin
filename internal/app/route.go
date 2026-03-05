@@ -11,6 +11,7 @@ import (
 func RegisterRoutes(r *gin.Engine, m *Modules,
 	health *handler.HealthHandler,
 	apiKey *handler.APIKeyHandler,
+	enabledModule *handler.EnabledModuleHandler,
 ) {
 
 	r.GET("/health/liveness", health.Liveness)
@@ -23,5 +24,7 @@ func RegisterRoutes(r *gin.Engine, m *Modules,
 	{
 		api.POST("/apikey/login", apiKey.Login)
 		api.POST("/apikey/rotate", adminAPIKeyAuth, apiKey.Rotate)
+		api.GET("/modules/enabled", adminAPIKeyAuth, enabledModule.List)
+		api.GET("/modules/status", adminAPIKeyAuth, enabledModule.Status)
 	}
 }

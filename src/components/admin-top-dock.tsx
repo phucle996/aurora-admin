@@ -5,6 +5,7 @@ import { Link, useLocation } from "react-router-dom";
 import LanguageSwitcher from "@/components/language-switcher";
 import ThemeSwitcher from "@/components/theme-switcher";
 import { Button } from "@/components/ui/button";
+import { useEnabledModules, type ModuleFeature } from "@/state/enabled-modules-context";
 import { cn } from "@/lib/utils";
 
 type AdminTopDockProps = {
@@ -16,9 +17,27 @@ const dockItems = [
   { id: "dashboard", label: "Dashboard", to: "/dashboard", icon: LayoutDashboard },
   { id: "module", label: "Modules", to: "/module", icon: Layers },
   { id: "settings", label: "Settings", to: "/settings", icon: Settings },
-  { id: "kvm", label: "KVM Hypervisor", to: "/hypervisor/kvm", icon: Server },
-  { id: "docker", label: "Docker", to: "/containers/docker", icon: Box },
-  { id: "k8s", label: "Kubernetes", to: "/orchestration/k8s", icon: Network },
+  {
+    id: "kvm",
+    label: "KVM Hypervisor",
+    to: "/hypervisor/kvm",
+    icon: Server,
+    feature: "kvm" as ModuleFeature,
+  },
+  {
+    id: "docker",
+    label: "Docker",
+    to: "/containers/docker",
+    icon: Box,
+    feature: "docker" as ModuleFeature,
+  },
+  {
+    id: "k8s",
+    label: "Kubernetes",
+    to: "/orchestration/k8s",
+    icon: Network,
+    feature: "k8s" as ModuleFeature,
+  },
 ];
 
 function isActivePath(itemID: string, pathname: string) {
@@ -46,8 +65,18 @@ function isActivePath(itemID: string, pathname: string) {
 export default function AdminTopDock({ onLogout, className }: AdminTopDockProps) {
   const { resolvedTheme } = useTheme();
   const location = useLocation();
+  const { status, isFeatureEnabled } = useEnabledModules();
 
   const isDark = resolvedTheme !== "light";
+  const visibleItems = dockItems.filter((item) => {
+    if (!item.feature) {
+      return true;
+    }
+    if (status !== "ready") {
+      return true;
+    }
+    return isFeatureEnabled(item.feature);
+  });
 
   return (
     <header
@@ -74,7 +103,7 @@ export default function AdminTopDock({ onLogout, className }: AdminTopDockProps)
           )}
           aria-label="Main navigation"
         >
-          {dockItems.map((item) => {
+          {visibleItems.map((item) => {
             const active = isActivePath(item.id, location.pathname);
             return (
               <Link

@@ -1,9 +1,12 @@
 package service
 
 import (
+	"admin/internal/config"
+	"admin/pkg/apikeyhash"
+	"admin/pkg/errorvar"
+	time_util "admin/pkg/logger/time"
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -12,87 +15,56 @@ import (
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
-	"golang.org/x/crypto/argon2"
 )
-
-const (
-	defaultAPIKeyPrefix         = "/admin/apikey"
-	defaultAPIKeyRotateInterval = 72 * time.Hour
-
-	argon2Memory  = 64 * 1024
-	argon2Time    = 3
-	argon2Threads = 2
-	argon2KeyLen  = 32
-	argon2SaltLen = 16
-)
-
-var (
-	ErrAPIKeyServiceNil    = errors.New("api key service is nil")
-	ErrAPIKeyInvalid       = errors.New("api key is invalid")
-	ErrAPIKeyMismatch      = errors.New("provided api key does not match current api key")
-	ErrAPIKeyConflict      = errors.New("api key rotate conflict")
-	ErrAPIKeyRotateTooSoon = errors.New("api key rotate is allowed every configured interval")
-)
-
-type APIKeyServiceConfig struct {
-	Prefix         string
-	RotateInterval time.Duration
-	OnBootstrap    func(ctx context.Context, result APIKeyBootstrapResult)
-	OnRotate       func(ctx context.Context, result APIKeyRotationResult)
-}
 
 type APIKeyVersion struct {
-	Version int64  `json:"version"`
-	Key     string `json:"key"`
+	Version int64
+	Key     string
 }
 
 type APIKeyBootstrapResult struct {
-	Created  bool           `json:"created"`
-	Current  APIKeyVersion  `json:"current"`
-	Previous *APIKeyVersion `json:"previous,omitempty"`
+	Created  bool
+	Current  APIKeyVersion
+	Previous *APIKeyVersion
 }
 
 type APIKeyRotationResult struct {
-	Old APIKeyVersion `json:"old"`
-	New APIKeyVersion `json:"new"`
+	Old APIKeyVersion
+	New APIKeyVersion
 }
 
 type APIKeyValidationResult struct {
-	Version   APIKeyVersion `json:"version"`
-	IsCurrent bool          `json:"is_current"`
+	Version   APIKeyVersion
+	IsCurrent bool
 }
 
 type APIKeyService struct {
 	etcd           *clientv3.Client
 	prefix         string
 	rotateInterval time.Duration
-	onBootstrap    func(ctx context.Context, result APIKeyBootstrapResult)
-	onRotate       func(ctx context.Context, result APIKeyRotationResult)
+	onBootstrap    func(context.Context, APIKeyBootstrapResult)
+	onRotate       func(context.Context, APIKeyRotationResult)
 }
 
-func NewAPIKeyService(etcd *clientv3.Client, cfg APIKeyServiceConfig) *APIKeyService {
-	prefix := strings.TrimSpace(cfg.Prefix)
-	if prefix == "" {
-		prefix = defaultAPIKeyPrefix
-	}
-
-	rotateInterval := cfg.RotateInterval
-	if rotateInterval <= 0 {
-		rotateInterval = defaultAPIKeyRotateInterval
-	}
+func NewAPIKeyService(
+	etcd *clientv3.Client,
+	cfg config.APIKeyCfg,
+	onBootstrap func(context.Context, APIKeyBootstrapResult),
+	onRotate func(context.Context, APIKeyRotationResult),
+) *APIKeyService {
 
 	return &APIKeyService{
 		etcd:           etcd,
-		prefix:         prefix,
-		rotateInterval: rotateInterval,
-		onBootstrap:    cfg.OnBootstrap,
-		onRotate:       cfg.OnRotate,
+		prefix:         cfg.Prefix,
+		rotateInterval: cfg.RotateInterval,
+		onBootstrap:    onBootstrap,
+		onRotate:       onRotate,
 	}
 }
 
 func (s *APIKeyService) BootstrapAPIKey(ctx context.Context) (*APIKeyBootstrapResult, error) {
 	if s == nil || s.etcd == nil {
-		return nil, ErrAPIKeyServiceNil
+		return nil, errorvar.ErrAPIKeyServiceNil
 	}
 
 	currentVersion, exists, err := s.readCurrentVersion(ctx)
@@ -102,10 +74,7 @@ func (s *APIKeyService) BootstrapAPIKey(ctx context.Context) (*APIKeyBootstrapRe
 	if exists {
 		return &APIKeyBootstrapResult{
 			Created: false,
-			Current: APIKeyVersion{
-				Version: currentVersion,
-				Key:     "",
-			},
+			Current: APIKeyVersion{Version: currentVersion},
 		}, nil
 	}
 
@@ -116,10 +85,7 @@ func (s *APIKeyService) BootstrapAPIKey(ctx context.Context) (*APIKeyBootstrapRe
 	if hasVersionKey {
 		return &APIKeyBootstrapResult{
 			Created: false,
-			Current: APIKeyVersion{
-				Version: latestVersion,
-				Key:     "",
-			},
+			Current: APIKeyVersion{Version: latestVersion},
 		}, nil
 	}
 
@@ -127,7 +93,7 @@ func (s *APIKeyService) BootstrapAPIKey(ctx context.Context) (*APIKeyBootstrapRe
 	if err != nil {
 		return nil, err
 	}
-	hashedKey, err := hashAPIKey(plainKey)
+	hashedKey, err := apikeyhash.Hash(plainKey)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +109,7 @@ func (s *APIKeyService) BootstrapAPIKey(ctx context.Context) (*APIKeyBootstrapRe
 			clientv3.OpPut(s.versionKey(1), hashedKey),
 			clientv3.OpPut(s.currentVersionKey(), "1"),
 			clientv3.OpPut(s.currentRotatedAtKey(), strconv.FormatInt(nowUnix, 10)),
-			clientv3.OpPut(s.currentRotatedAtTextKey(), formatTimeLocal(now)),
+			clientv3.OpPut(s.currentRotatedAtTextKey(), time_util.FormatTimeLocal(now)),
 		).
 		Commit()
 	if err != nil {
@@ -168,38 +134,33 @@ func (s *APIKeyService) BootstrapAPIKey(ctx context.Context) (*APIKeyBootstrapRe
 	if err != nil {
 		return nil, err
 	}
-	if !exists {
-		latestVersion, hasVersionKey, latestErr := s.readLatestVersionFromKeys(ctx)
-		if latestErr != nil {
-			return nil, latestErr
-		}
-		if !hasVersionKey {
-			return nil, errors.New("api key bootstrap failed: key not found after bootstrap race")
-		}
+	if exists {
 		return &APIKeyBootstrapResult{
 			Created: false,
-			Current: APIKeyVersion{
-				Version: latestVersion,
-				Key:     "",
-			},
+			Current: APIKeyVersion{Version: currentVersion},
 		}, nil
+	}
+
+	latestVersion, hasVersionKey, err = s.readLatestVersionFromKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !hasVersionKey {
+		return nil, errors.New("api key bootstrap failed: key not found after bootstrap race")
 	}
 	return &APIKeyBootstrapResult{
 		Created: false,
-		Current: APIKeyVersion{
-			Version: currentVersion,
-			Key:     "",
-		},
+		Current: APIKeyVersion{Version: latestVersion},
 	}, nil
 }
 
 func (s *APIKeyService) RotateAPIKey(ctx context.Context, oldKey string) (*APIKeyRotationResult, error) {
 	if s == nil || s.etcd == nil {
-		return nil, ErrAPIKeyServiceNil
+		return nil, errorvar.ErrAPIKeyServiceNil
 	}
 	oldKey = strings.TrimSpace(oldKey)
 	if oldKey == "" {
-		return nil, ErrAPIKeyInvalid
+		return nil, errorvar.ErrAPIKeyInvalid
 	}
 
 	currentVersion, exists, err := s.readCurrentVersion(ctx)
@@ -207,26 +168,26 @@ func (s *APIKeyService) RotateAPIKey(ctx context.Context, oldKey string) (*APIKe
 		return nil, err
 	}
 	if !exists {
-		return nil, ErrAPIKeyInvalid
+		return nil, errorvar.ErrAPIKeyInvalid
 	}
 
 	currentStored, err := s.readVersionStored(ctx, currentVersion)
 	if err != nil {
 		return nil, err
 	}
-	if !compareStoredAPIKey(currentStored, oldKey) {
-		return nil, ErrAPIKeyMismatch
+	if !apikeyhash.Compare(currentStored, oldKey) {
+		return nil, errorvar.ErrAPIKeyMismatch
 	}
 
-	lastRotateAt, err := s.readCurrentRotatedAt(ctx)
+	lastRotateAtUnix, err := s.readCurrentRotatedAt(ctx)
 	if err != nil {
 		return nil, err
 	}
 	now := time.Now().In(time.Local)
-	if lastRotateAt > 0 {
-		nextAllowed := time.Unix(lastRotateAt, 0).Add(s.rotateInterval)
+	if lastRotateAtUnix > 0 {
+		nextAllowed := time.Unix(lastRotateAtUnix, 0).Add(s.rotateInterval)
 		if now.Before(nextAllowed) {
-			return nil, fmt.Errorf("%w: next rotate at %s", ErrAPIKeyRotateTooSoon, formatTimeLocal(nextAllowed))
+			return nil, fmt.Errorf("%w: next rotate at %s", errorvar.ErrAPIKeyRotateTooSoon, time_util.FormatTimeLocal(nextAllowed))
 		}
 	}
 
@@ -234,13 +195,12 @@ func (s *APIKeyService) RotateAPIKey(ctx context.Context, oldKey string) (*APIKe
 	if err != nil {
 		return nil, err
 	}
-	newHashedKey, err := hashAPIKey(newPlainKey)
+	newHashedKey, err := apikeyhash.Hash(newPlainKey)
 	if err != nil {
 		return nil, err
 	}
 
 	nextVersion := currentVersion + 1
-	nextVersionStr := strconv.FormatInt(nextVersion, 10)
 	nowUnix := strconv.FormatInt(now.Unix(), 10)
 
 	tx := s.etcd.Txn(ctx).
@@ -250,11 +210,12 @@ func (s *APIKeyService) RotateAPIKey(ctx context.Context, oldKey string) (*APIKe
 		).
 		Then(
 			clientv3.OpPut(s.versionKey(nextVersion), newHashedKey),
-			clientv3.OpPut(s.currentVersionKey(), nextVersionStr),
+			clientv3.OpPut(s.currentVersionKey(), strconv.FormatInt(nextVersion, 10)),
 			clientv3.OpPut(s.currentRotatedAtKey(), nowUnix),
-			clientv3.OpPut(s.currentRotatedAtTextKey(), formatTimeLocal(now)),
+			clientv3.OpPut(s.currentRotatedAtTextKey(), time_util.FormatTimeLocal(now)),
 		)
 
+	// Keep only 2 latest versions (current + previous) for validation grace period.
 	if currentVersion > 1 {
 		tx = tx.Then(clientv3.OpDelete(s.versionKey(currentVersion - 1)))
 	}
@@ -264,7 +225,7 @@ func (s *APIKeyService) RotateAPIKey(ctx context.Context, oldKey string) (*APIKe
 		return nil, err
 	}
 	if !txnResp.Succeeded {
-		return nil, ErrAPIKeyConflict
+		return nil, errorvar.ErrAPIKeyConflict
 	}
 
 	result := &APIKeyRotationResult{
@@ -285,11 +246,11 @@ func (s *APIKeyService) RotateAPIKey(ctx context.Context, oldKey string) (*APIKe
 
 func (s *APIKeyService) ValidateAPIKey(ctx context.Context, apiKey string) (*APIKeyValidationResult, error) {
 	if s == nil || s.etcd == nil {
-		return nil, ErrAPIKeyServiceNil
+		return nil, errorvar.ErrAPIKeyServiceNil
 	}
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
-		return nil, ErrAPIKeyInvalid
+		return nil, errorvar.ErrAPIKeyInvalid
 	}
 
 	currentVersion, exists, err := s.readCurrentVersion(ctx)
@@ -297,35 +258,31 @@ func (s *APIKeyService) ValidateAPIKey(ctx context.Context, apiKey string) (*API
 		return nil, err
 	}
 	if !exists {
-		return nil, ErrAPIKeyInvalid
+		return nil, errorvar.ErrAPIKeyInvalid
 	}
 
 	currentStored, err := s.readVersionStored(ctx, currentVersion)
 	if err != nil {
 		return nil, err
 	}
-	if compareStoredAPIKey(currentStored, apiKey) {
+	if apikeyhash.Compare(currentStored, apiKey) {
 		return &APIKeyValidationResult{
-			Version: APIKeyVersion{
-				Version: currentVersion,
-			},
+			Version:   APIKeyVersion{Version: currentVersion},
 			IsCurrent: true,
 		}, nil
 	}
 
 	if currentVersion > 1 {
 		previousStored, err := s.readVersionStored(ctx, currentVersion-1)
-		if err == nil && compareStoredAPIKey(previousStored, apiKey) {
+		if err == nil && apikeyhash.Compare(previousStored, apiKey) {
 			return &APIKeyValidationResult{
-				Version: APIKeyVersion{
-					Version: currentVersion - 1,
-				},
+				Version:   APIKeyVersion{Version: currentVersion - 1},
 				IsCurrent: false,
 			}, nil
 		}
 	}
 
-	return nil, ErrAPIKeyMismatch
+	return nil, errorvar.ErrAPIKeyMismatch
 }
 
 func (s *APIKeyService) readCurrentVersion(ctx context.Context) (int64, bool, error) {
@@ -353,6 +310,7 @@ func (s *APIKeyService) readCurrentRotatedAt(ctx context.Context) (int64, error)
 	if len(resp.Kvs) == 0 {
 		return 0, nil
 	}
+
 	raw := strings.TrimSpace(string(resp.Kvs[0].Value))
 	if raw == "" {
 		return 0, nil
@@ -365,15 +323,15 @@ func (s *APIKeyService) readCurrentRotatedAt(ctx context.Context) (int64, error)
 }
 
 func (s *APIKeyService) readVersionStored(ctx context.Context, version int64) (string, error) {
-	keyResp, err := s.etcd.Get(ctx, s.versionKey(version))
+	resp, err := s.etcd.Get(ctx, s.versionKey(version))
 	if err != nil {
 		return "", err
 	}
-	if len(keyResp.Kvs) == 0 {
+	if len(resp.Kvs) == 0 {
 		return "", fmt.Errorf("api key value not found for version %d", version)
 	}
 
-	value := strings.TrimSpace(string(keyResp.Kvs[0].Value))
+	value := strings.TrimSpace(string(resp.Kvs[0].Value))
 	if value == "" {
 		return "", fmt.Errorf("api key value is empty for version %d", version)
 	}
@@ -430,69 +388,4 @@ func generateAPIKey() (string, error) {
 		return "", err
 	}
 	return "ak_" + base64.RawURLEncoding.EncodeToString(buf), nil
-}
-
-func hashAPIKey(apiKey string) (string, error) {
-	apiKey = strings.TrimSpace(apiKey)
-	if apiKey == "" {
-		return "", ErrAPIKeyInvalid
-	}
-
-	salt := make([]byte, argon2SaltLen)
-	if _, err := rand.Read(salt); err != nil {
-		return "", err
-	}
-
-	hash := argon2.IDKey(
-		[]byte(apiKey),
-		salt,
-		argon2Time,
-		argon2Memory,
-		argon2Threads,
-		argon2KeyLen,
-	)
-
-	saltB64 := base64.RawStdEncoding.EncodeToString(salt)
-	hashB64 := base64.RawStdEncoding.EncodeToString(hash)
-	return fmt.Sprintf("$argon2id$v=19$m=%d,t=%d,p=%d$%s$%s", argon2Memory, argon2Time, argon2Threads, saltB64, hashB64), nil
-}
-
-func compareStoredAPIKey(stored, provided string) bool {
-	stored = strings.TrimSpace(stored)
-	provided = strings.TrimSpace(provided)
-	if stored == "" || provided == "" {
-		return false
-	}
-
-	// Backward compatible with old plain storage.
-	if !strings.HasPrefix(stored, "$argon2id$") {
-		return subtle.ConstantTimeCompare([]byte(stored), []byte(provided)) == 1
-	}
-
-	parts := strings.Split(stored, "$")
-	if len(parts) != 6 {
-		return false
-	}
-	if parts[1] != "argon2id" {
-		return false
-	}
-
-	var memory uint32
-	var timeCost uint32
-	var threads uint8
-	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &timeCost, &threads); err != nil {
-		return false
-	}
-
-	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
-	if err != nil {
-		return false
-	}
-	decodedHash, err := base64.RawStdEncoding.DecodeString(parts[5])
-	if err != nil {
-		return false
-	}
-
-	computed := argon2.IDKey([]byte(provided), salt, timeCost, memory, threads, uint32(len(decodedHash)))
-	return subtle.ConstantTimeCompare(computed, decodedHash) == 1
 }

@@ -4,6 +4,7 @@ import (
 	etcdinfra "admin/infra/etcd"
 	telegraminfra "admin/infra/telegram"
 	"admin/internal/config"
+	"admin/internal/repository"
 	apisvc "admin/internal/service"
 	"admin/pkg/logger"
 	"context"
@@ -18,9 +19,10 @@ type Modules struct {
 	// Infrastructure
 	Etcd *clientv3.Client
 
-	APIKeySvc      *apisvc.APIKeyService
-	TokenSecretSvc *apisvc.TokenSecretService
-	CertStoreSvc   *apisvc.CertStoreService
+	APIKeySvc        *apisvc.APIKeyService
+	TokenSecretSvc   *apisvc.TokenSecretService
+	CertStoreSvc     *apisvc.CertStoreService
+	EnabledModuleSvc *apisvc.EnabledModuleService
 }
 
 // NewModules assembles all infrastructure dependencies.
@@ -72,23 +74,13 @@ func NewModules(
 		}
 	}
 
-	apiKeySvc := apisvc.NewAPIKeyService(etcdClient, apisvc.APIKeyServiceConfig{
-		Prefix:         cfg.APIKey.Prefix,
-		RotateInterval: cfg.APIKey.RotateInterval,
-		OnBootstrap:    onBootstrap,
-		OnRotate:       onRotate,
-	})
+	apiKeySvc := apisvc.NewAPIKeyService(etcdClient, cfg.APIKey, onBootstrap, onRotate)
 	if _, err := apiKeySvc.BootstrapAPIKey(ctx); err != nil {
 		_ = etcdClient.Close()
 		return nil, err
 	}
 
-	tokenSecretSvc := apisvc.NewTokenSecretService(etcdClient, apisvc.TokenSecretServiceConfig{
-		Prefix:                cfg.TokenSecret.Prefix,
-		AccessRotateInterval:  cfg.TokenSecret.AccessRotateInterval,
-		RefreshRotateInterval: cfg.TokenSecret.RefreshRotateInterval,
-		DeviceRotateInterval:  cfg.TokenSecret.DeviceRotateInterval,
-	})
+	tokenSecretSvc := apisvc.NewTokenSecretService(etcdClient, cfg.TokenSecret)
 	if err := tokenSecretSvc.Bootstrap(ctx); err != nil {
 		_ = etcdClient.Close()
 		return nil, err
@@ -98,14 +90,19 @@ func NewModules(
 		return nil, err
 	}
 
-	certStoreSvc := apisvc.NewCertStoreService(etcdClient, apisvc.CertStoreServiceConfig{
+	certStoreRepo := repository.NewEtcdCertStoreRepository(etcdClient)
+	certStoreSvc := apisvc.NewCertStoreService(certStoreRepo, apisvc.CertStoreServiceConfig{
 		Prefix: cfg.CertStore.Prefix,
 	})
 
+	enabledModuleRepo := repository.NewEtcdEndpointRepository(etcdClient, "/endpoint/")
+	enabledModuleSvc := apisvc.NewEnabledModuleService(enabledModuleRepo)
+
 	return &Modules{
-		Etcd:           etcdClient,
-		APIKeySvc:      apiKeySvc,
-		TokenSecretSvc: tokenSecretSvc,
-		CertStoreSvc:   certStoreSvc,
+		Etcd:             etcdClient,
+		APIKeySvc:        apiKeySvc,
+		TokenSecretSvc:   tokenSecretSvc,
+		CertStoreSvc:     certStoreSvc,
+		EnabledModuleSvc: enabledModuleSvc,
 	}, nil
 }

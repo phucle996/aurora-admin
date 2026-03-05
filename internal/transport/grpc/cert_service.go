@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"admin/internal/service"
+	"admin/pkg/errorvar"
 	"context"
 	"errors"
 	"strings"
@@ -59,10 +60,10 @@ func (s *CertTransportService) UploadCert(
 	key, err := s.certStore.UploadCert(ctx, objectID, req.CertType, req.Content)
 	if err != nil {
 		switch {
-		case errors.Is(err, service.ErrCertTypeInvalid),
-			errors.Is(err, service.ErrObjectIDInvalid):
+		case errors.Is(err, errorvar.ErrCertTypeInvalid),
+			errors.Is(err, errorvar.ErrObjectIDInvalid):
 			return nil, status.Error(codes.InvalidArgument, err.Error())
-		case errors.Is(err, service.ErrCertStoreServiceNil):
+		case errors.Is(err, errorvar.ErrCertStoreServiceNil):
 			return nil, status.Error(codes.Unavailable, err.Error())
 		default:
 			return nil, status.Error(codes.Internal, err.Error())

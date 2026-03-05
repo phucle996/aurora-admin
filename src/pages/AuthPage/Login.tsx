@@ -13,15 +13,18 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { AuthLayout, leftBackgrounds } from "./Authlayout";
+import { AuthLayout } from "./Authlayout";
+import { leftBackgrounds } from "./auth-layout-theme";
 import {
   getAdminAuthErrorMessage,
   loginWithAPIKey,
   setAdminSession,
 } from "@/lib/admin-auth";
+import { useEnabledModules } from "@/state/enabled-modules-context";
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const { refreshModules, clearModules } = useEnabledModules();
   const [adminKey, setAdminKey] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const { resolvedTheme } = useTheme();
@@ -70,10 +73,16 @@ export default function LoginPage() {
     try {
       await loginWithAPIKey(adminKey);
       setAdminSession(true);
+      try {
+        await refreshModules({ force: true });
+      } catch {
+        toast.warning("Không thể đồng bộ module list, đang dùng cache hiện có");
+      }
       toast.success("Xác thực thành công");
       navigate("/dashboard");
     } catch (error) {
       setAdminSession(false);
+      clearModules();
       toast.error(getAdminAuthErrorMessage(error));
     } finally {
       setSubmitting(false);

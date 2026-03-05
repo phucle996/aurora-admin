@@ -25,13 +25,14 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /app/bin/admin-server ./cm
 FROM alpine:3.21 AS runner
 WORKDIR /app
 
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata \
+  && addgroup -S nonroot \
+  && adduser -S -G nonroot -h /app -s /sbin/nologin nonroot
 
-COPY --from=backend-builder /app/bin/admin-server /app/server
-COPY --from=backend-builder /app/dist /app/dist
+COPY --from=backend-builder --chown=nonroot:nonroot /app/bin/admin-server /app/server
+COPY --from=backend-builder --chown=nonroot:nonroot /app/dist /app/dist
 
 USER nonroot:nonroot
 
 EXPOSE 3000
-
 ENTRYPOINT ["/app/server"]

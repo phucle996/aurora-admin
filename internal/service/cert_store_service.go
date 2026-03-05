@@ -1,20 +1,14 @@
 package service
 
 import (
+	"admin/internal/repository"
+	"admin/pkg/errorvar"
 	"context"
-	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
-	clientv3 "go.etcd.io/etcd/client/v3"
-)
-
-var (
-	ErrCertStoreServiceNil = errors.New("cert store service is nil")
-	ErrCertTypeInvalid     = errors.New("cert type is invalid")
-	ErrObjectIDInvalid     = errors.New("object id is invalid")
 )
 
 var certTypePattern = regexp.MustCompile(`^[a-z0-9_]{2,64}$`)
@@ -24,13 +18,13 @@ type CertStoreServiceConfig struct {
 }
 
 type CertStoreService struct {
-	etcd   *clientv3.Client
+	repo   repository.CertStoreRepository
 	prefix string
 }
 
-func NewCertStoreService(etcd *clientv3.Client, cfg CertStoreServiceConfig) *CertStoreService {
+func NewCertStoreService(repo repository.CertStoreRepository, cfg CertStoreServiceConfig) *CertStoreService {
 	return &CertStoreService{
-		etcd:   etcd,
+		repo:   repo,
 		prefix: strings.TrimSpace(cfg.Prefix),
 	}
 }
@@ -41,11 +35,11 @@ func (s *CertStoreService) UploadCert(
 	certType string,
 	content string,
 ) (string, error) {
-	if s == nil || s.etcd == nil {
-		return "", ErrCertStoreServiceNil
+	if s == nil || s.repo == nil {
+		return "", errorvar.ErrCertStoreServiceNil
 	}
 	if objectID == uuid.Nil {
-		return "", ErrObjectIDInvalid
+		return "", errorvar.ErrObjectIDInvalid
 	}
 
 	normalizedType, err := normalizeCertType(certType)
@@ -62,13 +56,13 @@ func (s *CertStoreService) UploadCert(
 
 	// Empty content is treated as delete operation to support rollback.
 	if trimmedContent == "" {
-		if _, err := s.etcd.Delete(ctx, key); err != nil {
+		if err := s.repo.Delete(ctx, key); err != nil {
 			return "", err
 		}
 		return key, nil
 	}
 
-	if _, err := s.etcd.Put(ctx, key, trimmedContent); err != nil {
+	if err := s.repo.Put(ctx, key, trimmedContent); err != nil {
 		return "", err
 	}
 	return key, nil
@@ -89,7 +83,7 @@ func normalizeCertType(raw string) (string, error) {
 	}
 
 	if !certTypePattern.MatchString(normalized) {
-		return "", ErrCertTypeInvalid
+		return "", errorvar.ErrCertTypeInvalid
 	}
 	return normalized, nil
 }

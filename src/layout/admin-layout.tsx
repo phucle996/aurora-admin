@@ -2,17 +2,20 @@ import { useTheme } from "next-themes";
 import { Outlet, useNavigate } from "react-router-dom";
 
 import AdminTopDock from "@/components/admin-top-dock";
-import { leftBackgrounds } from "@/pages/AuthPage/Authlayout";
+import { leftBackgrounds } from "@/pages/AuthPage/auth-layout-theme";
 import { setAdminSession } from "@/lib/admin-auth";
+import { useEnabledModules } from "@/state/enabled-modules-context";
 
 export default function AdminLayout() {
   const { resolvedTheme } = useTheme();
   const navigate = useNavigate();
+  const { clearModules } = useEnabledModules();
 
   const isDark = resolvedTheme !== "light";
 
   const handleLogout = () => {
     setAdminSession(false);
+    clearModules();
     navigate("/login");
   };
 

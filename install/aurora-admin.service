@@ -1,0 +1,20 @@
+[Unit]
+Description=Aurora Admin Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aurora
+Group=aurora
+EnvironmentFile=-/etc/aurora-admin.env
+ExecStart=/usr/local/bin/aurora-admin-service
+Restart=always
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=35
+LimitNOFILE=65535
+WorkingDirectory=/var/lib/aurora
+
+[Install]
+WantedBy=multi-user.target

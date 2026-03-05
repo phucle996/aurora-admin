@@ -1,6 +1,7 @@
 import axios from "axios";
 
 export const ADMIN_SESSION_STORAGE = "admin-ui:session-authenticated";
+const ENABLED_MODULES_CACHE_KEY = "admin-ui:enabled-modules-cache:v1";
 
 type LoginResponsePayload = {
   data?: {
@@ -10,7 +11,7 @@ type LoginResponsePayload = {
   error?: string;
 };
 
-function resolveAdminBaseURL(): string {
+export function resolveAdminBaseURL(): string {
   const adminBaseURL = import.meta.env.VITE_ADMIN_API_BASE_URL?.toString()?.trim();
   if (adminBaseURL) {
     return adminBaseURL;
@@ -38,6 +39,7 @@ export function setAdminSession(active: boolean): void {
     return;
   }
   localStorage.removeItem(ADMIN_SESSION_STORAGE);
+  localStorage.removeItem(ENABLED_MODULES_CACHE_KEY);
 }
 
 export async function loginWithAPIKey(apiKey: string): Promise<void> {

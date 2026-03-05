@@ -2,12 +2,9 @@ package config
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -15,13 +12,8 @@ import (
 )
 
 const (
-	EtcdPrefix = "/aurora"
-
-	runtimeConfigPrefix = EtcdPrefix + "/config"
-	sharedCorsPrefix    = EtcdPrefix + "/shared/cors"
-	apiKeyPrefix        = EtcdPrefix + "/apikey"
-	tokenSecretPrefix   = EtcdPrefix + "/token-secret"
-	certStorePrefix     = EtcdPrefix + "/cert-store"
+	runtimeConfigPrefix = "/runtime"
+	sharedCorsPrefix    = "/shared/cors"
 )
 
 type AppCfg struct {
@@ -58,7 +50,6 @@ type EtcdCfg struct {
 
 type DatabaseCfg struct {
 	URL     string
-	Schema  string
 	SSLMode string
 }
 
@@ -102,10 +93,22 @@ type CorsCfg struct {
 	MaxAge           time.Duration
 }
 
+type RedisCfg struct {
+	Addr               string
+	Username           string
+	Password           string
+	DB                 int
+	UseTLS             bool
+	CA                 string // file path
+	ClientKey          string // file path
+	ClientCert         string // file path
+	InsecureSkipVerify bool
+}
 type Config struct {
 	App         AppCfg
 	Etcd        EtcdCfg
 	Database    DatabaseCfg
+	Redis       RedisCfg
 	APIKey      APIKeyCfg
 	Telegram    TelegramCfg
 	TokenSecret TokenSecretCfg
@@ -122,10 +125,10 @@ func LoadConfig() *Config {
 	return &Config{
 		App: AppCfg{
 			Name:     "Aurora Admin",
-			HostName: "aurora-admin",
-			Port:     3009,
-			LogLV:    "info",
-			TimeZone: "Asia/Ho_Chi_Minh",
+			HostName: getEnv("APP_HOSTNAME", "aurora-admin"),
+			Port:     getEnvAsInt("APP_PORT", 3009),
+			LogLV:    getEnv("APP_LOG_LEVEL", "info"),
+			TimeZone: getEnv("APP_TIMEZONE", "Asia/Ho_Chi_Minh"),
 		},
 		Etcd: EtcdCfg{
 			Endpoints:            getEnvAsSlice("ETCD_ENDPOINTS", []string{"localhost:2379"}),
@@ -146,19 +149,34 @@ func LoadConfig() *Config {
 			MaxCallSendMsgSize:   getEnvAsInt("ETCD_MAX_CALL_SEND_MSG_SIZE", 2*1024*1024),
 			MaxCallRecvMsgSize:   getEnvAsInt("ETCD_MAX_CALL_RECV_MSG_SIZE", 2*1024*1024),
 		},
+		Database: DatabaseCfg{
+			URL:     getEnv("DATABASE_URL", ""),
+			SSLMode: getEnv("DB_SSLMODE", ""),
+		},
+		Redis: RedisCfg{
+			Addr:               getEnv("REDIS_ADDR", ""),
+			Username:           getEnv("REDIS_USERNAME", ""),
+			Password:           getEnv("REDIS_PASSWORD", ""),
+			DB:                 getEnvAsInt("REDIS_DB", 0),
+			UseTLS:             getEnvAsBool("REDIS_TLS", false),
+			CA:                 getEnv("REDIS_TLS_CA", ""),
+			ClientKey:          getEnv("REDIS_TLS_KEY", ""),
+			ClientCert:         getEnv("REDIS_TLS_CERT", ""),
+			InsecureSkipVerify: getEnvAsBool("REDIS_TLS_INSECURE", false),
+		},
 		APIKey: APIKeyCfg{
-			Prefix:         apiKeyPrefix,
+			Prefix:         "/apikey",
 			RotateInterval: 72 * time.Hour,
 		},
 		Telegram: TelegramCfg{
-			Enable:      false,
-			BotToken:    "",
-			ChatID:      "",
+			Enable:      getEnvAsBool("TELEGRAM_ENABLE", false),
+			BotToken:    getEnv("TELEGRAM_BOT_TOKEN", ""),
+			ChatID:      getEnv("TELEGRAM_CHAT_ID", ""),
 			BaseURL:     "https://api.telegram.org",
 			HTTPTimeout: 5 * time.Second,
 		},
 		TokenSecret: TokenSecretCfg{
-			Prefix:                tokenSecretPrefix,
+			Prefix:                "/token-secret",
 			AccessRotateInterval:  72 * time.Hour,
 			RefreshRotateInterval: 7 * 24 * time.Hour,
 			DeviceRotateInterval:  14 * 24 * time.Hour,
@@ -169,10 +187,27 @@ func LoadConfig() *Config {
 			DeviceTTL:  15 * time.Minute,
 			OttTTL:     15 * time.Minute,
 		},
+
 		CertStore: CertStoreCfg{
-			Prefix: certStorePrefix,
+			Prefix: "/cert-store",
 		},
-		Cors: CorsCfg{},
+		Cors: CorsCfg{
+			AllowOrigins: getEnvAsSlice(
+				"CORS_ALLOW_ORIGINS",
+				[]string{},
+			),
+			AllowMethods: getEnvAsSlice(
+				"CORS_ALLOW_METHODS",
+				[]string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
+			),
+			AllowHeaders: getEnvAsSlice(
+				"CORS_ALLOW_HEADERS",
+				[]string{"Origin", "Content-Type", "Accept", "Authorization"},
+			),
+			ExposeHeaders:    getEnvAsSlice("CORS_EXPOSE_HEADERS", []string{}),
+			AllowCredentials: getEnvAsBool("CORS_ALLOW_CREDENTIALS", true),
+			MaxAge:           getEnvAsDuration("CORS_MAX_AGE", 12*time.Hour),
+		},
 	}
 }
 
@@ -189,17 +224,107 @@ func LoadRuntimeFromEtcd(ctx context.Context, cli *clientv3.Client, cfg *Config)
 		return fmt.Errorf("no key found in prefix %s", runtimeConfigPrefix)
 	}
 
-	cfg.App.HostName = readString(values, "app/hostname", cfg.App.HostName)
-	cfg.App.Port = readInt(values, "app/port", cfg.App.Port)
-	cfg.App.TimeZone = readString(values, "app/timezone", cfg.App.TimeZone)
+	if cfg.App.TimeZone, err = readRequiredString(values, "app/timezone"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
 
-	cfg.Database.URL = readString(values, "database/url", cfg.Database.URL)
-	cfg.Database.Schema = readString(values, "database/schema", cfg.Database.Schema)
-	cfg.Database.SSLMode = readString(values, "database/sslmode", cfg.Database.SSLMode)
+	if cfg.Database.URL, err = readRequiredString(values, "postgresql/url"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.Database.SSLMode, err = readRequiredString(values, "postgresql/sslmode"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
 
-	cfg.Telegram.Enable = readBool(values, "telegram/enable", cfg.Telegram.Enable)
-	cfg.Telegram.BotToken = readString(values, "telegram/bot_token", cfg.Telegram.BotToken)
-	cfg.Telegram.ChatID = readString(values, "telegram/chat_id", cfg.Telegram.ChatID)
+	if cfg.Redis.Addr, err = readRequiredString(values, "redis/addr"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	cfg.Redis.Username = readOptionalString(values, "redis/username")
+	cfg.Redis.Password = readOptionalString(values, "redis/password")
+	if cfg.Redis.DB, err = readRequiredInt(values, "redis/db"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.Redis.UseTLS, err = readRequiredBool(values, "redis/use_tls"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	cfg.Redis.CA = readOptionalString(values, "redis/ca")
+	cfg.Redis.ClientKey = readOptionalString(values, "redis/client_key")
+	cfg.Redis.ClientCert = readOptionalString(values, "redis/client_cert")
+	if cfg.Redis.InsecureSkipVerify, err = readRequiredBool(values, "redis/insecure_skip_verify"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+
+	if cfg.Etcd.Endpoints, err = readRequiredSlice(values, "etcd/endpoints"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.Etcd.AutoSyncInterval, err = readRequiredDuration(values, "etcd/auto_sync_interval"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.Etcd.DialTimeout, err = readRequiredDuration(values, "etcd/dial_timeout"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.Etcd.DialKeepAliveTime, err = readRequiredDuration(values, "etcd/dial_keepalive_time"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.Etcd.DialKeepAliveTimeout, err = readRequiredDuration(values, "etcd/dial_keepalive_timeout"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	cfg.Etcd.Username = readOptionalString(values, "etcd/username")
+	cfg.Etcd.Password = readOptionalString(values, "etcd/password")
+	if cfg.Etcd.UseTLS, err = readRequiredBool(values, "etcd/use_tls"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	cfg.Etcd.CA = readOptionalString(values, "etcd/ca")
+	cfg.Etcd.ClientKey = readOptionalString(values, "etcd/client_key")
+	cfg.Etcd.ClientCert = readOptionalString(values, "etcd/client_cert")
+	cfg.Etcd.ServerName = readOptionalString(values, "etcd/server_name")
+	if cfg.Etcd.InsecureSkipVerify, err = readRequiredBool(values, "etcd/insecure_skip_verify"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.Etcd.PermitWithoutStream, err = readRequiredBool(values, "etcd/permit_without_stream"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.Etcd.RejectOldCluster, err = readRequiredBool(values, "etcd/reject_old_cluster"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.Etcd.MaxCallSendMsgSize, err = readRequiredInt(values, "etcd/max_call_send_msg_size"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.Etcd.MaxCallRecvMsgSize, err = readRequiredInt(values, "etcd/max_call_recv_msg_size"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+
+	if cfg.APIKey.RotateInterval, err = readRequiredDuration(values, "apikey/rotate_interval"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+
+	if cfg.Telegram.Enable, err = readRequiredBool(values, "telegram/enable"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	cfg.Telegram.BotToken = readOptionalString(values, "telegram/bot_token")
+	cfg.Telegram.ChatID = readOptionalString(values, "telegram/chat_id")
+
+	if cfg.TokenSecret.AccessRotateInterval, err = readRequiredDuration(values, "token_secret/access_rotate_interval"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.TokenSecret.RefreshRotateInterval, err = readRequiredDuration(values, "token_secret/refresh_rotate_interval"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.TokenSecret.DeviceRotateInterval, err = readRequiredDuration(values, "token_secret/device_rotate_interval"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+
+	if cfg.TokenTTL.AccessTTL, err = readRequiredDuration(values, "token_ttl/access_ttl"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.TokenTTL.RefreshTTL, err = readRequiredDuration(values, "token_ttl/refresh_ttl"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.TokenTTL.DeviceTTL, err = readRequiredDuration(values, "token_ttl/device_ttl"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.TokenTTL.OttTTL, err = readRequiredDuration(values, "token_ttl/ott_ttl"); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
 
 	corsValues, err := loadPrefixedValues(ctx, cli, sharedCorsPrefix)
 	if err != nil {
@@ -221,7 +346,10 @@ func LoadRuntimeFromEtcd(ctx context.Context, cli *clientv3.Client, cfg *Config)
 	if err != nil {
 		return fmt.Errorf("invalid cors config: %w", err)
 	}
-	exposeHeaders := readSlice(corsValues, "expose_headers", []string{})
+	exposeHeaders, err := readRequiredSlice(corsValues, "expose_headers")
+	if err != nil {
+		return fmt.Errorf("invalid cors config: %w", err)
+	}
 	allowCredentials, err := readRequiredBool(corsValues, "allow_credentials")
 	if err != nil {
 		return fmt.Errorf("invalid cors config: %w", err)
@@ -239,155 +367,4 @@ func LoadRuntimeFromEtcd(ctx context.Context, cli *clientv3.Client, cfg *Config)
 	cfg.Cors.MaxAge = maxAge
 
 	return nil
-}
-
-func loadPrefixedValues(ctx context.Context, cli *clientv3.Client, prefix string) (map[string]string, error) {
-	if cli == nil {
-		return nil, errors.New("etcd client is nil")
-	}
-	cleanPrefix := strings.TrimRight(strings.TrimSpace(prefix), "/")
-	if cleanPrefix == "" {
-		return nil, errors.New("prefix is empty")
-	}
-
-	resp, err := cli.Get(ctx, cleanPrefix+"/", clientv3.WithPrefix())
-	if err != nil {
-		return nil, err
-	}
-
-	out := make(map[string]string, len(resp.Kvs))
-	for _, kv := range resp.Kvs {
-		rawKey := strings.TrimSpace(string(kv.Key))
-		relative := strings.TrimPrefix(rawKey, cleanPrefix+"/")
-		relative = strings.TrimSpace(relative)
-		if relative == "" {
-			continue
-		}
-		out[relative] = strings.TrimSpace(string(kv.Value))
-	}
-	return out, nil
-}
-
-func readString(values map[string]string, key, fallback string) string {
-	v, ok := values[key]
-	if !ok {
-		return fallback
-	}
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return fallback
-	}
-	return v
-}
-
-func readInt(values map[string]string, key string, fallback int) int {
-	v, ok := values[key]
-	if !ok {
-		return fallback
-	}
-	n, err := strconv.Atoi(strings.TrimSpace(v))
-	if err != nil {
-		return fallback
-	}
-	return n
-}
-
-func readBool(values map[string]string, key string, fallback bool) bool {
-	v, ok := values[key]
-	if !ok {
-		return fallback
-	}
-	b, err := strconv.ParseBool(strings.TrimSpace(v))
-	if err != nil {
-		return fallback
-	}
-	return b
-}
-
-func readDuration(values map[string]string, key string, fallback time.Duration) time.Duration {
-	v, ok := values[key]
-	if !ok {
-		return fallback
-	}
-	d, err := time.ParseDuration(strings.TrimSpace(v))
-	if err != nil {
-		return fallback
-	}
-	return d
-}
-
-func readSlice(values map[string]string, key string, fallback []string) []string {
-	v, ok := values[key]
-	if !ok {
-		return fallback
-	}
-	trimmed := strings.TrimSpace(v)
-	if trimmed == "" {
-		return fallback
-	}
-
-	if strings.HasPrefix(trimmed, "[") {
-		var arr []string
-		if err := json.Unmarshal([]byte(trimmed), &arr); err == nil {
-			out := make([]string, 0, len(arr))
-			for _, item := range arr {
-				item = strings.TrimSpace(item)
-				if item != "" {
-					out = append(out, item)
-				}
-			}
-			if len(out) > 0 {
-				return out
-			}
-		}
-	}
-
-	parts := strings.Split(trimmed, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		item := strings.TrimSpace(part)
-		if item != "" {
-			out = append(out, item)
-		}
-	}
-	if len(out) == 0 {
-		return fallback
-	}
-	return out
-}
-
-func readRequiredSlice(values map[string]string, key string) ([]string, error) {
-	v, ok := values[key]
-	if !ok {
-		return nil, fmt.Errorf("missing key %q", key)
-	}
-	parsed := readSlice(values, key, nil)
-	if len(parsed) == 0 {
-		return nil, fmt.Errorf("key %q must not be empty (raw=%q)", key, strings.TrimSpace(v))
-	}
-	return parsed, nil
-}
-
-func readRequiredBool(values map[string]string, key string) (bool, error) {
-	v, ok := values[key]
-	if !ok {
-		return false, fmt.Errorf("missing key %q", key)
-	}
-	b, err := strconv.ParseBool(strings.TrimSpace(v))
-	if err != nil {
-		return false, fmt.Errorf("invalid bool for key %q: %w", key, err)
-	}
-	return b, nil
-}
-
-func readRequiredDuration(values map[string]string, key string) (time.Duration, error) {
-	v, ok := values[key]
-	if !ok {
-		return 0, fmt.Errorf("missing key %q", key)
-	}
-	d, err := time.ParseDuration(strings.TrimSpace(v))
-	if err != nil {
-		return 0, fmt.Errorf("invalid duration for key %q: %w", key, err)
-	}
-	return d, nil
 }

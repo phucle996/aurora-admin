@@ -3,6 +3,7 @@ package middleware
 import (
 	"admin/internal/service"
 	"admin/internal/transport/http/response"
+	"admin/pkg/errorvar"
 	"admin/pkg/logger"
 	"errors"
 	"strings"
@@ -90,10 +91,10 @@ func AuthAdminAPIKey(apiKeySvc *service.APIKeyService) gin.HandlerFunc {
 		validated, err := apiKeySvc.ValidateAPIKey(ctx, apiKey)
 		if err != nil {
 			switch {
-			case errors.Is(err, service.ErrAPIKeyInvalid), errors.Is(err, service.ErrAPIKeyMismatch):
+			case errors.Is(err, errorvar.ErrAPIKeyInvalid), errors.Is(err, errorvar.ErrAPIKeyMismatch):
 				response.RespondUnauthorized(c, "unauthorized")
 				logger.HandlerInfo(ctx, "auth.apikey", "admin api key mismatch")
-			case errors.Is(err, service.ErrAPIKeyServiceNil):
+			case errors.Is(err, errorvar.ErrAPIKeyServiceNil):
 				response.RespondServiceUnavailable(c, "api key validation unavailable")
 				logger.HandlerWarn(ctx, "auth.apikey", "api key service unavailable: %s", err.Error())
 			default:

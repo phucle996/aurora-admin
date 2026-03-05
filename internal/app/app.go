@@ -47,6 +47,7 @@ func NewApplication(cfg *config.Config) (*App, error) {
 	}
 	health := handler.NewHealthHandler(modules.Etcd)
 	apiKeyHandler := handler.NewAPIKeyHandler(modules.APIKeySvc)
+	enabledModuleHandler := handler.NewEnabledModuleHandler(modules.EnabledModuleSvc)
 	// --------------------
 	// gin http framework
 	// --------------------
@@ -59,7 +60,7 @@ func NewApplication(cfg *config.Config) (*App, error) {
 		gin.Recovery(),
 	)
 
-	RegisterRoutes(router, modules, health, apiKeyHandler)
+	RegisterRoutes(router, modules, health, apiKeyHandler, enabledModuleHandler)
 	RegisterFrontendSPA(router)
 
 	grpcServer := grpc.NewServer(grpc.ForceServerCodec(grpcTransport.JSONCodec()))

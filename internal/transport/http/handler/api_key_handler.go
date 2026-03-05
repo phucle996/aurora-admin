@@ -3,7 +3,9 @@ package handler
 import (
 	"admin/internal/service"
 	reqdto "admin/internal/transport/http/handler/dto/request"
+	resdto "admin/internal/transport/http/handler/dto/response"
 	"admin/internal/transport/http/response"
+	"admin/pkg/errorvar"
 	"context"
 	"errors"
 	"net/http"
@@ -40,11 +42,11 @@ func (h *APIKeyHandler) Login(c *gin.Context) {
 	validated, err := h.Svc.ValidateAPIKey(ctx, apiKey)
 	if err != nil {
 		switch {
-		case errors.Is(err, service.ErrAPIKeyInvalid):
+		case errors.Is(err, errorvar.ErrAPIKeyInvalid):
 			response.RespondBadRequest(c, "API Key is invalid")
-		case errors.Is(err, service.ErrAPIKeyMismatch):
+		case errors.Is(err, errorvar.ErrAPIKeyMismatch):
 			response.RespondUnauthorized(c, "API Key is invalid")
-		case errors.Is(err, service.ErrAPIKeyServiceNil):
+		case errors.Is(err, errorvar.ErrAPIKeyServiceNil):
 			response.RespondServiceUnavailable(c, "API Key service unavailable")
 		default:
 			response.RespondInternalError(c, err.Error())
@@ -89,15 +91,15 @@ func (h *APIKeyHandler) Rotate(c *gin.Context) {
 	result, err := h.Svc.RotateAPIKey(ctx, oldKey)
 	if err != nil {
 		switch {
-		case errors.Is(err, service.ErrAPIKeyInvalid):
+		case errors.Is(err, errorvar.ErrAPIKeyInvalid):
 			response.RespondBadRequest(c, "old_key is invalid")
-		case errors.Is(err, service.ErrAPIKeyMismatch):
+		case errors.Is(err, errorvar.ErrAPIKeyMismatch):
 			response.RespondUnauthorized(c, "old_key is invalid")
-		case errors.Is(err, service.ErrAPIKeyRotateTooSoon):
+		case errors.Is(err, errorvar.ErrAPIKeyRotateTooSoon):
 			response.RespondConflict(c, err.Error())
-		case errors.Is(err, service.ErrAPIKeyConflict):
+		case errors.Is(err, errorvar.ErrAPIKeyConflict):
 			response.RespondConflict(c, "api key changed, please retry")
-		case errors.Is(err, service.ErrAPIKeyServiceNil):
+		case errors.Is(err, errorvar.ErrAPIKeyServiceNil):
 			response.RespondServiceUnavailable(c, "api key service unavailable")
 		default:
 			response.RespondInternalError(c, err.Error())
@@ -106,7 +108,7 @@ func (h *APIKeyHandler) Rotate(c *gin.Context) {
 	}
 
 	response.RespondSuccess(c, gin.H{
-		"old": result.Old,
-		"new": result.New,
+		"old": resdto.NewAPIKeyVersion(result.Old),
+		"new": resdto.NewAPIKeyVersion(result.New),
 	}, "api key rotated")
 }

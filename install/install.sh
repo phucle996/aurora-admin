@@ -1,0 +1,384 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+REPO="${AURORA_ADMIN_GITHUB_REPO:-phucle996/aurora-admin}"
+VERSION="${AURORA_ADMIN_VERSION:-latest}"
+APP_NAME="${AURORA_ADMIN_BIN_NAME:-aurora-admin-service}"
+INSTALL_DIR="${AURORA_ADMIN_INSTALL_DIR:-/usr/local/bin}"
+BIN_PATH="${INSTALL_DIR}/${APP_NAME}"
+
+SERVICE_NAME="${AURORA_ADMIN_SERVICE_NAME:-aurora-admin.service}"
+SERVICE_TEMPLATE="${SCRIPT_DIR}/aurora-admin.service"
+SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
+ENV_FILE="${AURORA_ADMIN_ENV_FILE:-/etc/aurora-admin.env}"
+SERVICE_USER="${AURORA_ADMIN_SERVICE_USER:-aurora}"
+SERVICE_GROUP="${AURORA_ADMIN_SERVICE_GROUP:-aurora}"
+SERVICE_HOME="${AURORA_ADMIN_SERVICE_HOME:-/var/lib/aurora}"
+
+CONFIG_OUTPUT="${AURORA_ADMIN_CONFIG_OUTPUT:-./aurora-admin.env.sample}"
+INPUT_ENV_FILE=""
+MODE="install"
+TMP_DIR=""
+DELETE_INPUT_ENV="true"
+
+log() { printf '[install] %s\n' "$1"; }
+die() { printf '[install][error] %s\n' "$1" >&2; exit 1; }
+warn() { printf '[install][warn] %s\n' "$1" >&2; }
+
+cleanup() {
+  if [ -n "${TMP_DIR}" ] && [ -d "${TMP_DIR}" ]; then
+    rm -rf "${TMP_DIR}" || true
+  fi
+}
+
+as_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    die "need root permission (run as root or install sudo)"
+  fi
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "missing command: $1"
+}
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  ./install.sh --config [output_file]
+  ./install.sh -f <env_file> [-v <release_tag>]
+
+Options:
+  --config [output_file]  Generate sample env file then exit.
+  -f, --file <env_file>   Install using provided env file.
+  -v, --version <tag>     Install a specific GitHub release tag.
+  --keep-env-file         Do not delete input env file after success.
+  -h, --help              Show help.
+USAGE
+}
+
+parse_args() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --config)
+        MODE="config"
+        if [ "$#" -gt 1 ] && [ "${2#-}" != "$2" ]; then
+          :
+        elif [ "$#" -gt 1 ] && [ "${2}" != "" ]; then
+          CONFIG_OUTPUT="$2"
+          shift
+        fi
+        ;;
+      -f|--file)
+        [ "$#" -gt 1 ] || die "missing value for $1"
+        INPUT_ENV_FILE="$2"
+        shift
+        ;;
+      -v|--version)
+        [ "$#" -gt 1 ] || die "missing value for $1"
+        VERSION="$2"
+        shift
+        ;;
+      --keep-env-file)
+        DELETE_INPUT_ENV="false"
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "unknown argument: $1"
+        ;;
+    esac
+    shift
+  done
+
+  if [ "$MODE" = "config" ] && [ -n "$INPUT_ENV_FILE" ]; then
+    die "cannot use --config with -f/--file"
+  fi
+}
+
+arch() {
+  case "$(uname -m)" in
+    x86_64|amd64) echo "amd64" ;;
+    aarch64|arm64) echo "arm64" ;;
+    *) die "unsupported architecture: $(uname -m)" ;;
+  esac
+}
+
+download() {
+  local url="$1"
+  local out="$2"
+  local token="${AURORA_ADMIN_GITHUB_TOKEN:-}"
+
+  if command -v curl >/dev/null 2>&1; then
+    if [ -n "$token" ]; then
+      curl -fsSL -H "Authorization: Bearer ${token}" "$url" -o "$out"
+    else
+      curl -fsSL "$url" -o "$out"
+    fi
+    return
+  fi
+
+  if command -v wget >/dev/null 2>&1; then
+    if [ -n "$token" ]; then
+      wget --quiet --header="Authorization: Bearer ${token}" "$url" -O "$out"
+    else
+      wget --quiet "$url" -O "$out"
+    fi
+    return
+  fi
+
+  die "need curl or wget to download release assets"
+}
+
+resolve_tag() {
+  if [ "$VERSION" != "latest" ]; then
+    echo "$VERSION"
+    return
+  fi
+
+  local api_json="${TMP_DIR}/latest.json"
+  download "https://api.github.com/repos/${REPO}/releases/latest" "$api_json"
+  sed -n 's/.*"tag_name":[[:space:]]*"\([^"]\+\)".*/\1/p' "$api_json" | head -n1
+}
+
+verify_checksum() {
+  local tar_file="$1"
+  local checksums="$2"
+  local asset="$3"
+
+  local expected
+  expected="$(grep -E "[[:space:]](dist/)?${asset}$" "$checksums" | awk '{print $1}' | head -n1 || true)"
+  if [ -z "$expected" ]; then
+    warn "skip checksum: ${asset} not found in checksums.txt"
+    return
+  fi
+
+  local actual
+  actual="$(sha256sum "$tar_file" | awk '{print $1}')"
+  [ "$actual" = "$expected" ] || die "checksum mismatch for ${asset}"
+}
+
+ensure_service_group() {
+  if getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
+    return
+  fi
+
+  if command -v groupadd >/dev/null 2>&1; then
+    as_root groupadd --system "$SERVICE_GROUP"
+    return
+  fi
+  if command -v addgroup >/dev/null 2>&1; then
+    as_root addgroup --system "$SERVICE_GROUP"
+    return
+  fi
+
+  die "cannot create service group: neither groupadd nor addgroup found"
+}
+
+ensure_service_user() {
+  ensure_service_group
+
+  if id -u "$SERVICE_USER" >/dev/null 2>&1; then
+    as_root mkdir -p "$SERVICE_HOME"
+    as_root chown "${SERVICE_USER}:${SERVICE_GROUP}" "$SERVICE_HOME"
+    as_root chmod 700 "$SERVICE_HOME"
+    return
+  fi
+
+  local no_login_shell="/usr/sbin/nologin"
+  [ -x "$no_login_shell" ] || no_login_shell="/sbin/nologin"
+  [ -x "$no_login_shell" ] || no_login_shell="/bin/false"
+
+  if command -v useradd >/dev/null 2>&1; then
+    as_root useradd \
+      --system \
+      --create-home \
+      --home-dir "$SERVICE_HOME" \
+      --gid "$SERVICE_GROUP" \
+      --shell "$no_login_shell" \
+      "$SERVICE_USER"
+  elif command -v adduser >/dev/null 2>&1; then
+    as_root adduser \
+      --system \
+      --home "$SERVICE_HOME" \
+      --shell "$no_login_shell" \
+      --ingroup "$SERVICE_GROUP" \
+      "$SERVICE_USER"
+  else
+    die "cannot create service user: neither useradd nor adduser found"
+  fi
+
+  as_root mkdir -p "$SERVICE_HOME"
+  as_root chown "${SERVICE_USER}:${SERVICE_GROUP}" "$SERVICE_HOME"
+  as_root chmod 700 "$SERVICE_HOME"
+}
+
+write_config_template() {
+  local out="$1"
+  cat > "$out" <<'ENV_TPL'
+# Aurora Admin Service env template
+# Fill all required values before install.
+
+APP_HOSTNAME=aurora-admin.local
+APP_PORT=3009
+APP_LOG_LEVEL=info
+APP_TIMEZONE=Asia/Ho_Chi_Minh
+
+ETCD_ENDPOINTS=127.0.0.1:2379
+ETCD_AUTO_SYNC_INTERVAL=5m
+ETCD_DIAL_TIMEOUT=5s
+ETCD_DIAL_KEEPALIVE_TIME=30s
+ETCD_DIAL_KEEPALIVE_TIMEOUT=10s
+ETCD_USERNAME=
+ETCD_PASSWORD=
+ETCD_TLS=false
+ETCD_TLS_CA=
+ETCD_TLS_CERT=
+ETCD_TLS_KEY=
+ETCD_TLS_SERVER_NAME=
+ETCD_TLS_INSECURE=false
+ETCD_PERMIT_WITHOUT_STREAM=false
+ETCD_REJECT_OLD_CLUSTER=false
+ETCD_MAX_CALL_SEND_MSG_SIZE=2097152
+ETCD_MAX_CALL_RECV_MSG_SIZE=2097152
+
+DATABASE_URL=
+DB_SCHEMA=public
+DB_SSLMODE=disable
+
+REDIS_ADDR=127.0.0.1:6379
+REDIS_USERNAME=
+REDIS_PASSWORD=
+REDIS_DB=0
+REDIS_TLS=false
+REDIS_TLS_CA=
+REDIS_TLS_CERT=
+REDIS_TLS_KEY=
+REDIS_TLS_INSECURE=false
+
+ADMIN_APIKEY_ROTATE_INTERVAL=72h
+ADMIN_TOKEN_SECRET_ACCESS_ROTATE_INTERVAL=72h
+ADMIN_TOKEN_SECRET_REFRESH_ROTATE_INTERVAL=168h
+ADMIN_TOKEN_SECRET_DEVICE_ROTATE_INTERVAL=336h
+
+ADMIN_TOKEN_ACCESS_TTL=15m
+ADMIN_TOKEN_REFRESH_TTL=168h
+ADMIN_TOKEN_DEVICE_TTL=15m
+ADMIN_TOKEN_OTT_TTL=15m
+
+TELEGRAM_ENABLE=false
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+TELEGRAM_BASE_URL=https://api.telegram.org
+TELEGRAM_HTTP_TIMEOUT=5s
+
+CORS_ALLOW_ORIGINS=http://localhost:5173,https://aurora.local,https://admin.aurora.local
+CORS_ALLOW_METHODS=GET,POST,PUT,PATCH,DELETE,HEAD,OPTIONS
+CORS_ALLOW_HEADERS=Origin,Content-Type,Accept,Authorization
+CORS_EXPOSE_HEADERS=
+CORS_ALLOW_CREDENTIALS=true
+CORS_MAX_AGE=12h
+ENV_TPL
+  chmod 600 "$out"
+}
+
+install_binary() {
+  local tag="$1"
+  local machine_arch="$2"
+  local asset="${APP_NAME}_linux_${machine_arch}.tar.gz"
+  local tar_file="${TMP_DIR}/${asset}"
+  local checksums="${TMP_DIR}/checksums.txt"
+  local base_url="https://github.com/${REPO}/releases/download/${tag}"
+
+  log "download ${asset} (${REPO}@${tag})"
+  download "${base_url}/${asset}" "$tar_file"
+  download "${base_url}/checksums.txt" "$checksums"
+  verify_checksum "$tar_file" "$checksums" "$asset"
+
+  tar -xzf "$tar_file" -C "$TMP_DIR"
+
+  local extracted="${TMP_DIR}/${APP_NAME}_linux_${machine_arch}"
+  [ -f "$extracted" ] || extracted="${TMP_DIR}/${APP_NAME}"
+  [ -f "$extracted" ] || die "binary not found in archive ${asset}"
+
+  as_root mkdir -p "$INSTALL_DIR"
+  as_root install -m 0755 -o root -g root "$extracted" "$BIN_PATH"
+}
+
+install_env_file() {
+  local source_env="$1"
+  [ -f "$source_env" ] || die "env file not found: ${source_env}"
+
+  as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$source_env" "$ENV_FILE"
+}
+
+install_systemd_service() {
+  [ -f "$SERVICE_TEMPLATE" ] || die "service template not found: $SERVICE_TEMPLATE"
+
+  as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$SERVICE_TEMPLATE" "$SERVICE_PATH"
+  as_root systemctl daemon-reload
+  as_root systemctl enable "$SERVICE_NAME"
+  as_root systemctl restart "$SERVICE_NAME"
+}
+
+delete_source_env_if_needed() {
+  local source_env="$1"
+  if [ "$DELETE_INPUT_ENV" != "true" ]; then
+    return
+  fi
+
+  local src_abs env_abs
+  src_abs="$(readlink -f "$source_env" 2>/dev/null || printf '%s' "$source_env")"
+  env_abs="$(readlink -f "$ENV_FILE" 2>/dev/null || printf '%s' "$ENV_FILE")"
+  if [ "$src_abs" = "$env_abs" ]; then
+    return
+  fi
+
+  rm -f "$source_env" || warn "cannot delete source env file: ${source_env}"
+}
+
+main() {
+  trap cleanup EXIT
+  parse_args "$@"
+
+  if [ "$MODE" = "config" ]; then
+    write_config_template "$CONFIG_OUTPUT"
+    log "generated config template: ${CONFIG_OUTPUT}"
+    log "next: ./install.sh -f ${CONFIG_OUTPUT}"
+    exit 0
+  fi
+
+  [ -n "$INPUT_ENV_FILE" ] || die "missing env file. Use: ./install.sh -f <env_file>"
+
+  require_cmd tar
+  require_cmd sha256sum
+  require_cmd systemctl
+
+  TMP_DIR="$(mktemp -d)"
+  local machine_arch tag
+  machine_arch="$(arch)"
+  tag="$(resolve_tag)"
+  [ -n "$tag" ] || die "cannot resolve release tag"
+
+  ensure_service_user
+  install_binary "$tag" "$machine_arch"
+  install_env_file "$INPUT_ENV_FILE"
+  install_systemd_service
+  delete_source_env_if_needed "$INPUT_ENV_FILE"
+
+  log "done"
+  log "binary: ${BIN_PATH}"
+  log "service: ${SERVICE_NAME}"
+  log "env: ${ENV_FILE}"
+  log "release: ${REPO}@${tag}"
+  log "check: sudo systemctl status ${SERVICE_NAME} --no-pager"
+}
+
+main "$@"

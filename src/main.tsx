@@ -5,12 +5,15 @@ import { ThemeProvider } from "next-themes";
 
 import "./index.css";
 import App from "./App.tsx";
+import { EnabledModulesProvider } from "@/state/enabled-modules-context";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
       <BrowserRouter>
-        <App />
+        <EnabledModulesProvider>
+          <App />
+        </EnabledModulesProvider>
       </BrowserRouter>
     </ThemeProvider>
   </StrictMode>,

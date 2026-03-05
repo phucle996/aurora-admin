@@ -10,32 +10,49 @@ export function useKvmNodeHardwareInfo(
   nodeId: string,
   reloadTick: number,
 ): KvmNodeHardwareInfo | null {
-  const [hardwareInfo, setHardwareInfo] = useState<KvmNodeHardwareInfo | null>(
-    null,
-  );
+  const [hardwareState, setHardwareState] = useState<{
+    nodeId: string;
+    info: KvmNodeHardwareInfo | null;
+  }>({
+    nodeId: "",
+    info: null,
+  });
 
   useEffect(() => {
     if (!nodeId) {
-      setHardwareInfo(null);
       return;
     }
 
     const controller = new AbortController();
+    let active = true;
+
     const run = async () => {
       try {
         const info = await getKvmNodeHardwareInfo(nodeId, controller.signal);
-        setHardwareInfo(info);
-      } catch (err) {
-        if (isRequestCanceled(err)) {
+        if (!active) {
           return;
         }
-        setHardwareInfo(null);
+        setHardwareState({ nodeId, info });
+      } catch (err) {
+        if (!active || isRequestCanceled(err)) {
+          return;
+        }
+        setHardwareState({ nodeId, info: null });
       }
     };
 
     void run();
-    return () => controller.abort();
+    return () => {
+      active = false;
+      controller.abort();
+    };
   }, [nodeId, reloadTick]);
 
-  return hardwareInfo;
+  if (!nodeId) {
+    return null;
+  }
+  if (hardwareState.nodeId !== nodeId) {
+    return null;
+  }
+  return hardwareState.info;
 }

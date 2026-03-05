@@ -23,6 +23,11 @@ func main() {
 	if cfg.Etcd.DialTimeout <= 0 {
 		bootstrapCtx, bootstrapCancel = context.WithTimeout(context.Background(), 5*time.Second)
 	}
+	if err := config.SeedRuntimeToEtcdIfAbsent(bootstrapCtx, bootstrapEtcd, cfg); err != nil {
+		bootstrapCancel()
+		_ = bootstrapEtcd.Close()
+		log.Fatalf("failed to seed runtime config to etcd: %v", err)
+	}
 	if err := config.LoadRuntimeFromEtcd(bootstrapCtx, bootstrapEtcd, cfg); err != nil {
 		bootstrapCancel()
 		_ = bootstrapEtcd.Close()

@@ -1,6 +1,9 @@
 package service
 
 import (
+	"admin/internal/config"
+	"admin/pkg/errorvar"
+	time_util "admin/pkg/logger/time"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -15,17 +18,11 @@ import (
 )
 
 const (
-	defaultTokenSecretPrefix              = "/admin/token-secret"
+	defaultTokenSecretPrefix              = "/aurora/token-secret"
 	defaultAccessTokenRotateInterval      = 72 * time.Hour
 	defaultRefreshTokenRotateInterval     = 7 * 24 * time.Hour
 	defaultDeviceTokenRotateInterval      = 14 * 24 * time.Hour
 	defaultTokenSecretRotateCheckInterval = time.Hour
-)
-
-var (
-	ErrTokenSecretServiceNil  = errors.New("token secret service is nil")
-	ErrTokenSecretKindInvalid = errors.New("token secret kind is invalid")
-	ErrTokenSecretConflict    = errors.New("token secret rotate conflict")
 )
 
 type TokenSecretKind string
@@ -36,26 +33,19 @@ const (
 	TokenSecretDevice     TokenSecretKind = "device_token"
 )
 
-type TokenSecretServiceConfig struct {
-	Prefix                string
-	AccessRotateInterval  time.Duration
-	RefreshRotateInterval time.Duration
-	DeviceRotateInterval  time.Duration
-}
-
 type TokenSecretVersion struct {
-	Version       int64  `json:"version"`
-	Secret        string `json:"secret"`
-	RotatedAtUnix int64  `json:"rotated_at_unix"`
-	RotatedAt     string `json:"rotated_at"`
+	Version       int64
+	Secret        string
+	RotatedAtUnix int64
+	RotatedAt     string
 }
 
 type TokenSecretPair struct {
-	Kind                  TokenSecretKind     `json:"kind"`
-	Current               TokenSecretVersion  `json:"current"`
-	Previous              *TokenSecretVersion `json:"previous,omitempty"`
-	RotateIntervalSeconds int64               `json:"rotate_interval_seconds"`
-	NextRotateAtUnix      int64               `json:"next_rotate_at_unix"`
+	Kind                  TokenSecretKind
+	Current               TokenSecretVersion
+	Previous              *TokenSecretVersion
+	RotateIntervalSeconds int64
+	NextRotateAtUnix      int64
 }
 
 type TokenSecretService struct {
@@ -72,7 +62,7 @@ type tokenSecretRecord struct {
 	RotatedAt     string `json:"rotated_at"`
 }
 
-func NewTokenSecretService(etcd *clientv3.Client, cfg TokenSecretServiceConfig) *TokenSecretService {
+func NewTokenSecretService(etcd *clientv3.Client, cfg config.TokenSecretCfg) *TokenSecretService {
 	prefix := strings.TrimSpace(cfg.Prefix)
 	if prefix == "" {
 		prefix = defaultTokenSecretPrefix
@@ -109,13 +99,13 @@ func ParseTokenSecretKind(raw string) (TokenSecretKind, error) {
 	case "device", "device_token", "device_jwt":
 		return TokenSecretDevice, nil
 	default:
-		return "", ErrTokenSecretKindInvalid
+		return "", errorvar.ErrTokenSecretKindInvalid
 	}
 }
 
 func (s *TokenSecretService) Bootstrap(ctx context.Context) error {
 	if s == nil || s.etcd == nil {
-		return ErrTokenSecretServiceNil
+		return errorvar.ErrTokenSecretServiceNil
 	}
 	for _, kind := range s.supportedKinds() {
 		if err := s.ensureInitialized(ctx, kind); err != nil {
@@ -127,7 +117,7 @@ func (s *TokenSecretService) Bootstrap(ctx context.Context) error {
 
 func (s *TokenSecretService) RotateDueSecrets(ctx context.Context) error {
 	if s == nil || s.etcd == nil {
-		return ErrTokenSecretServiceNil
+		return errorvar.ErrTokenSecretServiceNil
 	}
 	for _, kind := range s.supportedKinds() {
 		if err := s.rotateIfDue(ctx, kind); err != nil {
@@ -144,7 +134,7 @@ func (s *TokenSecretService) StartAutoRotate(
 ) {
 	if s == nil || s.etcd == nil {
 		if onError != nil {
-			onError(ErrTokenSecretServiceNil)
+			onError(errorvar.ErrTokenSecretServiceNil)
 		}
 		return
 	}
@@ -175,10 +165,10 @@ func (s *TokenSecretService) GetSecretPair(
 	kind TokenSecretKind,
 ) (*TokenSecretPair, error) {
 	if s == nil || s.etcd == nil {
-		return nil, ErrTokenSecretServiceNil
+		return nil, errorvar.ErrTokenSecretServiceNil
 	}
 	if !s.isSupportedKind(kind) {
-		return nil, ErrTokenSecretKindInvalid
+		return nil, errorvar.ErrTokenSecretKindInvalid
 	}
 
 	if err := s.ensureInitialized(ctx, kind); err != nil {
@@ -193,7 +183,7 @@ func (s *TokenSecretService) GetSecretPair(
 		return nil, err
 	}
 	if !exists || currentVersion <= 0 {
-		return nil, ErrTokenSecretKindInvalid
+		return nil, errorvar.ErrTokenSecretKindInvalid
 	}
 
 	currentRecord, _, err := s.readVersionRecord(ctx, kind, currentVersion)
@@ -234,7 +224,7 @@ func (s *TokenSecretService) GetSecretPair(
 
 func (s *TokenSecretService) GetAllSecretPairs(ctx context.Context) ([]TokenSecretPair, error) {
 	if s == nil || s.etcd == nil {
-		return nil, ErrTokenSecretServiceNil
+		return nil, errorvar.ErrTokenSecretServiceNil
 	}
 	kinds := s.supportedKinds()
 	out := make([]TokenSecretPair, 0, len(kinds))
@@ -268,7 +258,7 @@ func (s *TokenSecretService) ensureInitialized(ctx context.Context, kind TokenSe
 	recordRaw, err := marshalTokenSecretRecord(tokenSecretRecord{
 		Secret:        secret,
 		RotatedAtUnix: nowUnix,
-		RotatedAt:     formatTimeLocal(now),
+		RotatedAt:     time_util.FormatTimeLocal(now),
 	})
 	if err != nil {
 		return err
@@ -338,7 +328,7 @@ func (s *TokenSecretService) rotateIfDue(ctx context.Context, kind TokenSecretKi
 		newRaw, err := marshalTokenSecretRecord(tokenSecretRecord{
 			Secret:        newSecret,
 			RotatedAtUnix: now.Unix(),
-			RotatedAt:     formatTimeLocal(now),
+			RotatedAt:     time_util.FormatTimeLocal(now),
 		})
 		if err != nil {
 			return err
@@ -366,7 +356,7 @@ func (s *TokenSecretService) rotateIfDue(ctx context.Context, kind TokenSecretKi
 		}
 	}
 
-	return ErrTokenSecretConflict
+	return errorvar.ErrTokenSecretConflict
 }
 
 func (s *TokenSecretService) readCurrentVersion(
@@ -475,7 +465,7 @@ func unmarshalTokenSecretRecord(raw string) (tokenSecretRecord, error) {
 	}
 	record.RotatedAt = strings.TrimSpace(record.RotatedAt)
 	if record.RotatedAt == "" && record.RotatedAtUnix > 0 {
-		record.RotatedAt = formatTimeLocal(time.Unix(record.RotatedAtUnix, 0))
+		record.RotatedAt = time_util.FormatTimeLocal(time.Unix(record.RotatedAtUnix, 0))
 	}
 	return record, nil
 }
