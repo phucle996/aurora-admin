@@ -10,12 +10,12 @@ INSTALL_DIR="${AURORA_ADMIN_INSTALL_DIR:-/usr/local/bin}"
 BIN_PATH="${INSTALL_DIR}/${APP_NAME}"
 
 SERVICE_NAME="${AURORA_ADMIN_SERVICE_NAME:-aurora-admin.service}"
-SERVICE_TEMPLATE="${SCRIPT_DIR}/aurora-admin.service"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
 ENV_FILE="${AURORA_ADMIN_ENV_FILE:-/etc/aurora-admin.env}"
 SERVICE_USER="${AURORA_ADMIN_SERVICE_USER:-aurora}"
 SERVICE_GROUP="${AURORA_ADMIN_SERVICE_GROUP:-aurora}"
 SERVICE_HOME="${AURORA_ADMIN_SERVICE_HOME:-/var/lib/aurora}"
+DIST_PATH="${SERVICE_HOME}/dist"
 
 CONFIG_OUTPUT="${AURORA_ADMIN_CONFIG_OUTPUT:-./aurora-admin.env.sample}"
 INPUT_ENV_FILE=""
@@ -312,6 +312,37 @@ install_binary() {
   as_root install -m 0755 -o root -g root "$extracted" "$BIN_PATH"
 }
 
+download_release_source() {
+  local tag="$1"
+  local archive="${TMP_DIR}/source-${tag}.tar.gz"
+  local repo_name="${REPO##*/}"
+  local url="https://codeload.github.com/${REPO}/tar.gz/refs/tags/${tag}"
+
+  log "download source bundle (${REPO}@${tag})"
+  download "$url" "$archive"
+  tar -xzf "$archive" -C "$TMP_DIR"
+
+  local extracted_root
+  extracted_root="$(find "$TMP_DIR" -maxdepth 1 -mindepth 1 -type d -name "${repo_name}-*" | head -n1 || true)"
+  [ -n "$extracted_root" ] || die "cannot locate extracted source bundle for tag ${tag}"
+
+  echo "$extracted_root"
+}
+
+install_frontend_dist() {
+  local source_root="$1"
+  local source_dist="${source_root}/dist"
+
+  [ -d "$source_dist" ] || die "dist folder not found in release source bundle: ${source_dist}"
+
+  as_root rm -rf "$DIST_PATH"
+  as_root mkdir -p "$DIST_PATH"
+  as_root cp -R "${source_dist}/." "$DIST_PATH/"
+  as_root chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "$DIST_PATH"
+  as_root find "$DIST_PATH" -type d -exec chmod 0500 {} \;
+  as_root find "$DIST_PATH" -type f -exec chmod 0400 {} \;
+}
+
 install_env_file() {
   local source_env="$1"
   [ -f "$source_env" ] || die "env file not found: ${source_env}"
@@ -320,9 +351,10 @@ install_env_file() {
 }
 
 install_systemd_service() {
-  [ -f "$SERVICE_TEMPLATE" ] || die "service template not found: $SERVICE_TEMPLATE"
+  local source_service="$1"
+  [ -f "$source_service" ] || die "service file not found: $source_service"
 
-  as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$SERVICE_TEMPLATE" "$SERVICE_PATH"
+  as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$source_service" "$SERVICE_PATH"
   as_root systemctl daemon-reload
   as_root systemctl enable "$SERVICE_NAME"
   as_root systemctl restart "$SERVICE_NAME"
@@ -362,21 +394,25 @@ main() {
   require_cmd systemctl
 
   TMP_DIR="$(mktemp -d)"
-  local machine_arch tag
+  local machine_arch tag source_root source_service
   machine_arch="$(arch)"
   tag="$(resolve_tag)"
   [ -n "$tag" ] || die "cannot resolve release tag"
 
   ensure_service_user
   install_binary "$tag" "$machine_arch"
+  source_root="$(download_release_source "$tag")"
+  source_service="${source_root}/install/aurora-admin.service"
+  install_frontend_dist "$source_root"
   install_env_file "$INPUT_ENV_FILE"
-  install_systemd_service
+  install_systemd_service "$source_service"
   delete_source_env_if_needed "$INPUT_ENV_FILE"
 
   log "done"
   log "binary: ${BIN_PATH}"
   log "service: ${SERVICE_NAME}"
   log "env: ${ENV_FILE}"
+  log "dist: ${DIST_PATH}"
   log "release: ${REPO}@${tag}"
   log "check: sudo systemctl status ${SERVICE_NAME} --no-pager"
 }
