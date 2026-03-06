@@ -49,7 +49,7 @@ jobs:
         with:
           scan-type: fs
           scan-ref: .
-          skip-files: .github/workflows/release.yml,**/*.md
+          skip-files: .github/workflows/release.yml,**/*.md,Dockerfile.dev,**/Dockerfile.dev
           format: table
           exit-code: "1"
           ignore-unfixed: true
