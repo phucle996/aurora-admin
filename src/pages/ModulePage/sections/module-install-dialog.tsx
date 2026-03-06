@@ -20,23 +20,23 @@ type ModuleInstallDialogProps = {
   installTarget: ModuleStatusCard | null;
   installScope: ModuleInstallScope;
   appHost: string;
-  endpoint: string;
-  installCommand: string;
+  appPort: string;
   sshHost: string;
   sshPort: string;
   sshUsername: string;
   sshPassword: string;
   sshPrivateKey: string;
+  sshHostKeyFingerprint: string;
   onOpenChange: (open: boolean) => void;
   onInstallScopeChange: (scope: ModuleInstallScope) => void;
   onAppHostChange: (value: string) => void;
-  onEndpointChange: (value: string) => void;
-  onInstallCommandChange: (value: string) => void;
+  onAppPortChange: (value: string) => void;
   onSshHostChange: (value: string) => void;
   onSshPortChange: (value: string) => void;
   onSshUsernameChange: (value: string) => void;
   onSshPasswordChange: (value: string) => void;
   onSshPrivateKeyChange: (value: string) => void;
+  onSshHostKeyFingerprintChange: (value: string) => void;
   onInstall: () => void;
 };
 
@@ -46,23 +46,23 @@ export function ModuleInstallDialog({
   installTarget,
   installScope,
   appHost,
-  endpoint,
-  installCommand,
+  appPort,
   sshHost,
   sshPort,
   sshUsername,
   sshPassword,
   sshPrivateKey,
+  sshHostKeyFingerprint,
   onOpenChange,
   onInstallScopeChange,
   onAppHostChange,
-  onEndpointChange,
-  onInstallCommandChange,
+  onAppPortChange,
   onSshHostChange,
   onSshPortChange,
   onSshUsernameChange,
   onSshPasswordChange,
   onSshPrivateKeyChange,
+  onSshHostKeyFingerprintChange,
   onInstall,
 }: ModuleInstallDialogProps) {
   return (
@@ -78,6 +78,28 @@ export function ModuleInstallDialog({
         </DialogHeader>
 
         <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-2">
+              <Label htmlFor="module-app-host">App Host</Label>
+              <Input
+                id="module-app-host"
+                value={appHost}
+                onChange={(event) => onAppHostChange(event.target.value)}
+                placeholder="vm.aurora.local"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="module-app-port">App Port (optional)</Label>
+              <Input
+                id="module-app-port"
+                value={appPort}
+                onChange={(event) => onAppPortChange(event.target.value)}
+                placeholder="De trong de random"
+                inputMode="numeric"
+              />
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 gap-2">
             <Button
               type="button"
@@ -96,47 +118,18 @@ export function ModuleInstallDialog({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="module-app-host">App Host</Label>
+            <Label htmlFor="ssh-host">SSH Host / Service IP</Label>
             <Input
-              id="module-app-host"
-              value={appHost}
-              onChange={(event) => onAppHostChange(event.target.value)}
-              placeholder="vm.aurora.local"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="module-endpoint">Endpoint</Label>
-            <Input
-              id="module-endpoint"
-              value={endpoint}
-              onChange={(event) => onEndpointChange(event.target.value)}
-              placeholder="vm.aurora.local:3001"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="module-command">Install Command (optional)</Label>
-            <Textarea
-              id="module-command"
-              value={installCommand}
-              onChange={(event) => onInstallCommandChange(event.target.value)}
-              placeholder="bash /opt/aurora/install-vm.sh"
+              id="ssh-host"
+              value={sshHost}
+              onChange={(event) => onSshHostChange(event.target.value)}
+              placeholder={installScope === "local" ? "De trong de auto detect" : "192.168.1.10"}
             />
           </div>
 
           {installScope === "remote" ? (
-            <div className="space-y-3 rounded-md border p-3">
+            <div className="space-y-3">
               <p className="text-sm font-medium">SSH Remote Target</p>
-              <div className="space-y-2">
-                <Label htmlFor="ssh-host">SSH Host</Label>
-                <Input
-                  id="ssh-host"
-                  value={sshHost}
-                  onChange={(event) => onSshHostChange(event.target.value)}
-                  placeholder="192.168.1.10"
-                />
-              </div>
               <div className="grid grid-cols-2 gap-2">
                 <div className="space-y-2">
                   <Label htmlFor="ssh-port">SSH Port</Label>
@@ -174,6 +167,19 @@ export function ModuleInstallDialog({
                   value={sshPrivateKey}
                   onChange={(event) => onSshPrivateKeyChange(event.target.value)}
                   placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="ssh-host-key-fingerprint">
+                  SSH Host Key Fingerprint (SHA256)
+                </Label>
+                <Input
+                  id="ssh-host-key-fingerprint"
+                  value={sshHostKeyFingerprint}
+                  onChange={(event) =>
+                    onSshHostKeyFingerprintChange(event.target.value)
+                  }
+                  placeholder="SHA256:..."
                 />
               </div>
             </div>

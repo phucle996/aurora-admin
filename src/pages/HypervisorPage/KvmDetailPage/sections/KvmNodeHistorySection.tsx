@@ -3,9 +3,9 @@ import { cn } from "@/lib/utils";
 
 export type KvmNodeHistoryRow = {
   timestamp: string;
-  cpuUsagePct: number;
-  ramUsagePct: number;
-  iops: number;
+  load1: number;
+  memoryUsedBytes: number;
+  diskWriteIos: number;
 };
 
 type KvmNodeHistorySectionProps = {

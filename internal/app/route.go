@@ -27,5 +27,8 @@ func RegisterRoutes(r *gin.Engine, m *Modules,
 		api.GET("/modules/enabled", adminAPIKeyAuth, enabledModule.List)
 		api.GET("/modules/status", adminAPIKeyAuth, enabledModule.Status)
 		api.POST("/modules/install", adminAPIKeyAuth, enabledModule.Install)
+		api.POST("/modules/install/stream", adminAPIKeyAuth, enabledModule.InstallStream)
+		api.POST("/modules/reinstall-cert", adminAPIKeyAuth, enabledModule.ReinstallCert)
+		api.POST("/modules/reinstall-cert/stream", adminAPIKeyAuth, enabledModule.ReinstallCertStream)
 	}
 }

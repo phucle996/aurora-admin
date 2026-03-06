@@ -1,4 +1,4 @@
-import { BellRing, Search, UserCircle2 } from "lucide-react";
+import { BellRing, Search } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useMemo } from "react";
 import { useLocation } from "react-router-dom";
@@ -10,13 +10,14 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 type AdminTopDockProps = {
-  onLogout: () => void;
   className?: string;
 };
 
 function resolvePageTitle(pathname: string): string {
   if (pathname.startsWith("/dashboard")) return "Dashboard";
   if (pathname.startsWith("/module")) return "Runtime Module Status Board";
+  if (pathname.startsWith("/guide")) return "User Guide";
+  if (pathname.startsWith("/changelog")) return "Admin Changelog";
   if (pathname.startsWith("/settings")) return "Settings";
   if (pathname.startsWith("/hypervisor/kvm")) return "KVM Hypervisor";
   if (pathname.startsWith("/containers/docker")) return "Docker Runtime";
@@ -24,7 +25,7 @@ function resolvePageTitle(pathname: string): string {
   return "Aurora Admin";
 }
 
-export default function AdminTopDock({ onLogout, className }: AdminTopDockProps) {
+export default function AdminTopDock({ className }: AdminTopDockProps) {
   const { resolvedTheme } = useTheme();
   const location = useLocation();
 
@@ -34,8 +35,8 @@ export default function AdminTopDock({ onLogout, className }: AdminTopDockProps)
   return (
     <header
       className={cn(
-        "sticky top-0 z-30 rounded-[18px] border px-4 py-3 backdrop-blur",
-        isDark ? "border-white/10 bg-slate-900/70" : "border-slate-200 bg-white/80",
+        "sticky top-0 z-30 rounded-[18px] border px-4 py-3 shadow-sm backdrop-blur",
+        isDark ? "border-white/10 bg-slate-900/92" : "border-slate-200 bg-white/92",
         className,
       )}
     >
@@ -97,20 +98,6 @@ export default function AdminTopDock({ onLogout, className }: AdminTopDockProps)
           >
             <ThemeSwitcher />
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            className={cn(
-              "rounded-xl",
-              isDark ? "border-white/15 bg-white/5 text-white hover:bg-white/10" : "bg-white/90",
-            )}
-            onClick={onLogout}
-            title="Đăng xuất"
-            aria-label="Đăng xuất"
-          >
-            <UserCircle2 className="h-4 w-4" />
-          </Button>
         </div>
       </div>
     </header>

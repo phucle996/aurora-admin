@@ -92,9 +92,6 @@ export default function DashboardPage() {
             Tổng quan bảo mật, hoạt động vận hành và trạng thái dịch vụ theo module đang chọn.
           </p>
         </div>
-        <Button variant="outline" className={cn(isDark && "border-white/20 bg-white/5")} asChild>
-          <Link to="/login">Login page</Link>
-        </Button>
       </header>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">

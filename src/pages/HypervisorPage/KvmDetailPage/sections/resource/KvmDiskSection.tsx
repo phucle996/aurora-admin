@@ -16,7 +16,7 @@ import {
   CardHeader,
 } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import type { KvmDiskChartSample } from "@/pages/HypervisorPage/KvmDetailPage/sections/resource/kvm-node-lite-metrics";
+import type { KvmDiskChartSample } from "@/pages/HypervisorPage/KvmDetailPage/sections/resource/kvm-node-raw-metrics";
 
 type KvmDiskRealtimeSectionProps = {
   panelClass: string;
@@ -25,47 +25,51 @@ type KvmDiskRealtimeSectionProps = {
   samples: KvmDiskChartSample[];
   diskCount?: number;
   primaryDiskLabel?: string;
-  currentMBps: number;
-  averageMBps: number;
-  peakMBps: number;
-  currentIops: number;
-  readMBps: number;
-  writeMBps: number;
+  readBytesCounter: number;
+  writeBytesCounter: number;
+  readIosCounter: number;
+  writeIosCounter: number;
+  ioTimeMsCounter: number;
   rangeControl?: ReactNode;
 };
 
-type KvmDiskMetricKey =
-  | "throughputMBps"
-  | "readMBps"
-  | "writeMBps"
-  | "totalIops"
-  | "utilPercent";
+type KvmDiskMetricKey = Exclude<keyof KvmDiskChartSample, "timestamp">;
 
 type KvmDiskMetricDefinition = {
   key: KvmDiskMetricKey;
   label: string;
-  unit: string;
-  decimals: number;
+  mode: "bytes" | "count" | "ms";
 };
 
 const DISK_METRICS: KvmDiskMetricDefinition[] = [
-  { key: "throughputMBps", label: "Throughput", unit: "MB/s", decimals: 2 },
-  { key: "readMBps", label: "Read", unit: "MB/s", decimals: 2 },
-  { key: "writeMBps", label: "Write", unit: "MB/s", decimals: 2 },
-  { key: "totalIops", label: "IOPS", unit: "", decimals: 0 },
-  { key: "utilPercent", label: "Disk util", unit: "%", decimals: 2 },
+  { key: "readBytes", label: "Read bytes", mode: "bytes" },
+  { key: "writeBytes", label: "Write bytes", mode: "bytes" },
+  { key: "readIos", label: "Read IOs", mode: "count" },
+  { key: "writeIos", label: "Write IOs", mode: "count" },
+  { key: "ioTimeMs", label: "IO time", mode: "ms" },
 ];
 
 function formatDiskMetricValue(
   value: number,
   metric: KvmDiskMetricDefinition,
 ): string {
-  const normalized = Number.isFinite(value) ? value : 0;
-  const body =
-    metric.decimals <= 0
-      ? Math.round(normalized).toLocaleString()
-      : normalized.toFixed(metric.decimals);
-  return metric.unit ? `${body} ${metric.unit}` : body;
+  const normalized = Number.isFinite(value) && value > 0 ? value : 0;
+  if (metric.mode === "bytes") {
+    if (normalized >= 1024 ** 3) {
+      return `${(normalized / 1024 ** 3).toFixed(2)} GiB`;
+    }
+    if (normalized >= 1024 ** 2) {
+      return `${(normalized / 1024 ** 2).toFixed(2)} MiB`;
+    }
+    if (normalized >= 1024) {
+      return `${(normalized / 1024).toFixed(2)} KiB`;
+    }
+    return `${Math.round(normalized)} B`;
+  }
+  if (metric.mode === "ms") {
+    return `${Math.round(normalized).toLocaleString()} ms`;
+  }
+  return Math.round(normalized).toLocaleString();
 }
 
 export function KvmDiskRealtimeSection({
@@ -75,17 +79,16 @@ export function KvmDiskRealtimeSection({
   samples,
   diskCount = 0,
   primaryDiskLabel = "",
-  currentMBps,
-  averageMBps,
-  peakMBps,
-  currentIops,
-  readMBps,
-  writeMBps,
+  readBytesCounter,
+  writeBytesCounter,
+  readIosCounter,
+  writeIosCounter,
+  ioTimeMsCounter,
   rangeControl,
 }: KvmDiskRealtimeSectionProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [selectedMetricKey, setSelectedMetricKey] =
-    useState<KvmDiskMetricKey>("throughputMBps");
+    useState<KvmDiskMetricKey>("readBytes");
 
   const selectedMetric = useMemo(
     () =>
@@ -106,11 +109,11 @@ export function KvmDiskRealtimeSection({
   const latestRow = samples.length > 0 ? samples[samples.length - 1] : null;
 
   const fallbackMetricValues: Record<KvmDiskMetricKey, number> = {
-    throughputMBps: currentMBps,
-    readMBps,
-    writeMBps,
-    totalIops: currentIops,
-    utilPercent: 0,
+    readBytes: readBytesCounter,
+    writeBytes: writeBytesCounter,
+    readIos: readIosCounter,
+    writeIos: writeIosCounter,
+    ioTimeMs: ioTimeMsCounter,
   };
 
   return (
@@ -289,23 +292,6 @@ export function KvmDiskRealtimeSection({
                     </button>
                   );
                 })}
-
-                <div className="rounded-md border border-black/10 bg-black/[0.03] px-2 py-2 dark:border-white/10 dark:bg-white/[0.03]">
-                  <p className={cn("text-sm pl-2", textMuted)}>
-                    Average throughput
-                  </p>
-                  <p className={cn("text-xl pl-2 font-semibold", textPrimary)}>
-                    {averageMBps.toFixed(2)} MB/s
-                  </p>
-                </div>
-                <div className="rounded-md border border-black/10 bg-black/[0.03] px-2 py-2 dark:border-white/10 dark:bg-white/[0.03]">
-                  <p className={cn("text-sm pl-2", textMuted)}>
-                    Peak throughput
-                  </p>
-                  <p className={cn("text-xl pl-2 font-semibold", textPrimary)}>
-                    {peakMBps.toFixed(2)} MB/s
-                  </p>
-                </div>
               </div>
             </div>
           )}

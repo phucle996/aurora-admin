@@ -2,6 +2,7 @@ package service
 
 import (
 	"admin/internal/config"
+	keycfg "admin/internal/key"
 	"admin/pkg/apikeyhash"
 	"admin/pkg/errorvar"
 	time_util "admin/pkg/logger/time"
@@ -363,23 +364,23 @@ func (s *APIKeyService) readLatestVersionFromKeys(ctx context.Context) (int64, b
 }
 
 func (s *APIKeyService) currentVersionKey() string {
-	return s.prefix + "/current_version"
+	return keycfg.APIKeyCurrentVersionKey(s.prefix)
 }
 
 func (s *APIKeyService) currentRotatedAtKey() string {
-	return s.prefix + "/current_rotated_at"
+	return keycfg.APIKeyCurrentRotatedAtKey(s.prefix)
 }
 
 func (s *APIKeyService) currentRotatedAtTextKey() string {
-	return s.prefix + "/current_rotated_at_text"
+	return keycfg.APIKeyCurrentRotatedAtTextKey(s.prefix)
 }
 
 func (s *APIKeyService) versionKey(version int64) string {
-	return fmt.Sprintf("%s/v/%d", s.prefix, version)
+	return keycfg.APIKeyVersionKey(s.prefix, version)
 }
 
 func (s *APIKeyService) versionPrefixKey() string {
-	return s.prefix + "/v/"
+	return keycfg.APIKeyVersionPrefixKey(s.prefix)
 }
 
 func generateAPIKey() (string, error) {

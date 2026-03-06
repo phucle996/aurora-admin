@@ -1,6 +1,7 @@
 package config
 
 import (
+	keycfg "admin/internal/key"
 	"context"
 	"errors"
 	"fmt"
@@ -11,17 +12,15 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
-const (
-	runtimeConfigPrefix = "/runtime"
-	sharedCorsPrefix    = "/shared/cors"
-)
-
 type AppCfg struct {
 	Name     string
 	HostName string
 	Port     int
 	LogLV    string
 	TimeZone string
+	TLSCert  string
+	TLSKey   string
+	TLSCA    string
 }
 
 type EtcdCfg struct {
@@ -129,6 +128,9 @@ func LoadConfig() *Config {
 			Port:     getEnvAsInt("APP_PORT", 3009),
 			LogLV:    getEnv("APP_LOG_LEVEL", "info"),
 			TimeZone: getEnv("APP_TIMEZONE", "Asia/Ho_Chi_Minh"),
+			TLSCert:  "/etc/aurora/certs/admin.crt",
+			TLSKey:   "/etc/aurora/certs/admin.key",
+			TLSCA:    "/etc/aurora/certs/ca.crt",
 		},
 		Etcd: EtcdCfg{
 			Endpoints:            getEnvAsSlice("ETCD_ENDPOINTS", []string{"localhost:2379"}),
@@ -165,18 +167,17 @@ func LoadConfig() *Config {
 			InsecureSkipVerify: getEnvAsBool("REDIS_TLS_INSECURE", false),
 		},
 		APIKey: APIKeyCfg{
-			Prefix:         "/apikey",
+			Prefix:         keycfg.APIKeyPrefix,
 			RotateInterval: 72 * time.Hour,
 		},
 		Telegram: TelegramCfg{
-			Enable:      getEnvAsBool("TELEGRAM_ENABLE", false),
 			BotToken:    getEnv("TELEGRAM_BOT_TOKEN", ""),
 			ChatID:      getEnv("TELEGRAM_CHAT_ID", ""),
 			BaseURL:     "https://api.telegram.org",
 			HTTPTimeout: 5 * time.Second,
 		},
 		TokenSecret: TokenSecretCfg{
-			Prefix:                "/token-secret",
+			Prefix:                keycfg.TokenSecretPrefix,
 			AccessRotateInterval:  72 * time.Hour,
 			RefreshRotateInterval: 7 * 24 * time.Hour,
 			DeviceRotateInterval:  14 * 24 * time.Hour,
@@ -189,24 +190,17 @@ func LoadConfig() *Config {
 		},
 
 		CertStore: CertStoreCfg{
-			Prefix: "/cert-store",
+			Prefix: keycfg.CertStorePrefix,
 		},
 		Cors: CorsCfg{
-			AllowOrigins: getEnvAsSlice(
-				"CORS_ALLOW_ORIGINS",
-				[]string{},
-			),
-			AllowMethods: getEnvAsSlice(
-				"CORS_ALLOW_METHODS",
-				[]string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
-			),
-			AllowHeaders: getEnvAsSlice(
-				"CORS_ALLOW_HEADERS",
-				[]string{"Origin", "Content-Type", "Accept", "Authorization"},
-			),
-			ExposeHeaders:    getEnvAsSlice("CORS_EXPOSE_HEADERS", []string{}),
-			AllowCredentials: getEnvAsBool("CORS_ALLOW_CREDENTIALS", true),
-			MaxAge:           getEnvAsDuration("CORS_MAX_AGE", 12*time.Hour),
+			AllowOrigins: []string{},
+			AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
+
+			AllowHeaders: []string{"Origin", "Content-Type", "Accept", "Authorization"},
+
+			ExposeHeaders:    []string{},
+			AllowCredentials: true,
+			MaxAge:           12 * time.Hour,
 		},
 	}
 }
@@ -216,145 +210,142 @@ func LoadRuntimeFromEtcd(ctx context.Context, cli *clientv3.Client, cfg *Config)
 		return errors.New("config is nil")
 	}
 
-	values, err := loadPrefixedValues(ctx, cli, runtimeConfigPrefix)
+	values, err := loadPrefixedValues(ctx, cli, keycfg.RuntimePrefix)
 	if err != nil {
 		return err
 	}
 	if len(values) == 0 {
-		return fmt.Errorf("no key found in prefix %s", runtimeConfigPrefix)
+		return fmt.Errorf("no key found in prefix %s", keycfg.RuntimePrefix)
 	}
 
-	if cfg.App.TimeZone, err = readRequiredString(values, "app/timezone"); err != nil {
-		return fmt.Errorf("invalid runtime config: %w", err)
-	}
-
-	if cfg.Database.URL, err = readRequiredString(values, "postgresql/url"); err != nil {
-		return fmt.Errorf("invalid runtime config: %w", err)
-	}
-	if cfg.Database.SSLMode, err = readRequiredString(values, "postgresql/sslmode"); err != nil {
+	if cfg.App.TimeZone, err = readRequiredString(values, keycfg.RTAppTZ); err != nil {
 		return fmt.Errorf("invalid runtime config: %w", err)
 	}
 
-	if cfg.Redis.Addr, err = readRequiredString(values, "redis/addr"); err != nil {
+	if cfg.Database.URL, err = readRequiredString(values, keycfg.RTPgURL); err != nil {
 		return fmt.Errorf("invalid runtime config: %w", err)
 	}
-	cfg.Redis.Username = readOptionalString(values, "redis/username")
-	cfg.Redis.Password = readOptionalString(values, "redis/password")
-	if cfg.Redis.DB, err = readRequiredInt(values, "redis/db"); err != nil {
-		return fmt.Errorf("invalid runtime config: %w", err)
-	}
-	if cfg.Redis.UseTLS, err = readRequiredBool(values, "redis/use_tls"); err != nil {
-		return fmt.Errorf("invalid runtime config: %w", err)
-	}
-	cfg.Redis.CA = readOptionalString(values, "redis/ca")
-	cfg.Redis.ClientKey = readOptionalString(values, "redis/client_key")
-	cfg.Redis.ClientCert = readOptionalString(values, "redis/client_cert")
-	if cfg.Redis.InsecureSkipVerify, err = readRequiredBool(values, "redis/insecure_skip_verify"); err != nil {
+	if cfg.Database.SSLMode, err = readRequiredString(values, keycfg.RTPgSSLMode); err != nil {
 		return fmt.Errorf("invalid runtime config: %w", err)
 	}
 
-	if cfg.Etcd.Endpoints, err = readRequiredSlice(values, "etcd/endpoints"); err != nil {
+	if cfg.Redis.Addr, err = readRequiredString(values, keycfg.RTRedisAddr); err != nil {
 		return fmt.Errorf("invalid runtime config: %w", err)
 	}
-	if cfg.Etcd.AutoSyncInterval, err = readRequiredDuration(values, "etcd/auto_sync_interval"); err != nil {
+	cfg.Redis.Username = readOptionalString(values, keycfg.RTRedisUser)
+	cfg.Redis.Password = readOptionalString(values, keycfg.RTRedisPass)
+	if cfg.Redis.DB, err = readRequiredInt(values, keycfg.RTRedisDB); err != nil {
 		return fmt.Errorf("invalid runtime config: %w", err)
 	}
-	if cfg.Etcd.DialTimeout, err = readRequiredDuration(values, "etcd/dial_timeout"); err != nil {
+	if cfg.Redis.UseTLS, err = readRequiredBool(values, keycfg.RTRedisTLS); err != nil {
 		return fmt.Errorf("invalid runtime config: %w", err)
 	}
-	if cfg.Etcd.DialKeepAliveTime, err = readRequiredDuration(values, "etcd/dial_keepalive_time"); err != nil {
-		return fmt.Errorf("invalid runtime config: %w", err)
-	}
-	if cfg.Etcd.DialKeepAliveTimeout, err = readRequiredDuration(values, "etcd/dial_keepalive_timeout"); err != nil {
-		return fmt.Errorf("invalid runtime config: %w", err)
-	}
-	cfg.Etcd.Username = readOptionalString(values, "etcd/username")
-	cfg.Etcd.Password = readOptionalString(values, "etcd/password")
-	if cfg.Etcd.UseTLS, err = readRequiredBool(values, "etcd/use_tls"); err != nil {
-		return fmt.Errorf("invalid runtime config: %w", err)
-	}
-	cfg.Etcd.CA = readOptionalString(values, "etcd/ca")
-	cfg.Etcd.ClientKey = readOptionalString(values, "etcd/client_key")
-	cfg.Etcd.ClientCert = readOptionalString(values, "etcd/client_cert")
-	cfg.Etcd.ServerName = readOptionalString(values, "etcd/server_name")
-	if cfg.Etcd.InsecureSkipVerify, err = readRequiredBool(values, "etcd/insecure_skip_verify"); err != nil {
-		return fmt.Errorf("invalid runtime config: %w", err)
-	}
-	if cfg.Etcd.PermitWithoutStream, err = readRequiredBool(values, "etcd/permit_without_stream"); err != nil {
-		return fmt.Errorf("invalid runtime config: %w", err)
-	}
-	if cfg.Etcd.RejectOldCluster, err = readRequiredBool(values, "etcd/reject_old_cluster"); err != nil {
-		return fmt.Errorf("invalid runtime config: %w", err)
-	}
-	if cfg.Etcd.MaxCallSendMsgSize, err = readRequiredInt(values, "etcd/max_call_send_msg_size"); err != nil {
-		return fmt.Errorf("invalid runtime config: %w", err)
-	}
-	if cfg.Etcd.MaxCallRecvMsgSize, err = readRequiredInt(values, "etcd/max_call_recv_msg_size"); err != nil {
+	cfg.Redis.CA = readOptionalString(values, keycfg.RTRedisCA)
+	cfg.Redis.ClientKey = readOptionalString(values, keycfg.RTRedisKey)
+	cfg.Redis.ClientCert = readOptionalString(values, keycfg.RTRedisCert)
+	if cfg.Redis.InsecureSkipVerify, err = readRequiredBool(values, keycfg.RTRedisInsecure); err != nil {
 		return fmt.Errorf("invalid runtime config: %w", err)
 	}
 
-	if cfg.APIKey.RotateInterval, err = readRequiredDuration(values, "apikey/rotate_interval"); err != nil {
+	if cfg.Etcd.Endpoints, err = readRequiredSlice(values, keycfg.RTEtcdEndpoints); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.Etcd.AutoSyncInterval, err = readRequiredDuration(values, keycfg.RTEtcdAutoSync); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.Etcd.DialTimeout, err = readRequiredDuration(values, keycfg.RTEtcdDialTimeout); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.Etcd.DialKeepAliveTime, err = readRequiredDuration(values, keycfg.RTEtcdKeepAliveTime); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.Etcd.DialKeepAliveTimeout, err = readRequiredDuration(values, keycfg.RTEtcdKeepAliveTimeout); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	cfg.Etcd.Username = readOptionalString(values, keycfg.RTEtcdUser)
+	cfg.Etcd.Password = readOptionalString(values, keycfg.RTEtcdPass)
+	if cfg.Etcd.UseTLS, err = readRequiredBool(values, keycfg.RTEtcdTLS); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	cfg.Etcd.CA = readOptionalString(values, keycfg.RTEtcdCA)
+	cfg.Etcd.ClientKey = readOptionalString(values, keycfg.RTEtcdKey)
+	cfg.Etcd.ClientCert = readOptionalString(values, keycfg.RTEtcdCert)
+	cfg.Etcd.ServerName = readOptionalString(values, keycfg.RTEtcdServerName)
+	if cfg.Etcd.InsecureSkipVerify, err = readRequiredBool(values, keycfg.RTEtcdInsecure); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.Etcd.PermitWithoutStream, err = readRequiredBool(values, keycfg.RTEtcdPermitNoStream); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.Etcd.RejectOldCluster, err = readRequiredBool(values, keycfg.RTEtcdRejectOldCluster); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.Etcd.MaxCallSendMsgSize, err = readRequiredInt(values, keycfg.RTEtcdMaxCallSendMsgSize); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.Etcd.MaxCallRecvMsgSize, err = readRequiredInt(values, keycfg.RTEtcdMaxCallRecvMsgSize); err != nil {
 		return fmt.Errorf("invalid runtime config: %w", err)
 	}
 
-	if cfg.Telegram.Enable, err = readRequiredBool(values, "telegram/enable"); err != nil {
-		return fmt.Errorf("invalid runtime config: %w", err)
-	}
-	cfg.Telegram.BotToken = readOptionalString(values, "telegram/bot_token")
-	cfg.Telegram.ChatID = readOptionalString(values, "telegram/chat_id")
-
-	if cfg.TokenSecret.AccessRotateInterval, err = readRequiredDuration(values, "token_secret/access_rotate_interval"); err != nil {
-		return fmt.Errorf("invalid runtime config: %w", err)
-	}
-	if cfg.TokenSecret.RefreshRotateInterval, err = readRequiredDuration(values, "token_secret/refresh_rotate_interval"); err != nil {
-		return fmt.Errorf("invalid runtime config: %w", err)
-	}
-	if cfg.TokenSecret.DeviceRotateInterval, err = readRequiredDuration(values, "token_secret/device_rotate_interval"); err != nil {
+	if cfg.APIKey.RotateInterval, err = readRequiredDuration(values, keycfg.RTAPIKeyRotateEvery); err != nil {
 		return fmt.Errorf("invalid runtime config: %w", err)
 	}
 
-	if cfg.TokenTTL.AccessTTL, err = readRequiredDuration(values, "token_ttl/access_ttl"); err != nil {
+	cfg.Telegram.BotToken = readOptionalString(values, keycfg.RTTelegramBotToken)
+	cfg.Telegram.ChatID = readOptionalString(values, keycfg.RTTelegramChatID)
+
+	if cfg.TokenSecret.AccessRotateInterval, err = readRequiredDuration(values, keycfg.RTSecretRotateAccess); err != nil {
 		return fmt.Errorf("invalid runtime config: %w", err)
 	}
-	if cfg.TokenTTL.RefreshTTL, err = readRequiredDuration(values, "token_ttl/refresh_ttl"); err != nil {
+	if cfg.TokenSecret.RefreshRotateInterval, err = readRequiredDuration(values, keycfg.RTSecretRotateRefresh); err != nil {
 		return fmt.Errorf("invalid runtime config: %w", err)
 	}
-	if cfg.TokenTTL.DeviceTTL, err = readRequiredDuration(values, "token_ttl/device_ttl"); err != nil {
-		return fmt.Errorf("invalid runtime config: %w", err)
-	}
-	if cfg.TokenTTL.OttTTL, err = readRequiredDuration(values, "token_ttl/ott_ttl"); err != nil {
+	if cfg.TokenSecret.DeviceRotateInterval, err = readRequiredDuration(values, keycfg.RTSecretRotateDevice); err != nil {
 		return fmt.Errorf("invalid runtime config: %w", err)
 	}
 
-	corsValues, err := loadPrefixedValues(ctx, cli, sharedCorsPrefix)
+	if cfg.TokenTTL.AccessTTL, err = readRequiredDuration(values, keycfg.RTTTLAccess); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.TokenTTL.RefreshTTL, err = readRequiredDuration(values, keycfg.RTTTLRefresh); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.TokenTTL.DeviceTTL, err = readRequiredDuration(values, keycfg.RTTTLDevice); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+	if cfg.TokenTTL.OttTTL, err = readRequiredDuration(values, keycfg.RTTTLOTT); err != nil {
+		return fmt.Errorf("invalid runtime config: %w", err)
+	}
+
+	corsValues, err := loadPrefixedValues(ctx, cli, keycfg.SharedCORSPrefix)
 	if err != nil {
 		return err
 	}
 	if len(corsValues) == 0 {
-		return fmt.Errorf("no key found in prefix %s", sharedCorsPrefix)
+		return fmt.Errorf("no key found in prefix %s", keycfg.SharedCORSPrefix)
 	}
 
-	allowOrigins, err := readRequiredSlice(corsValues, "allow_origins")
+	allowOrigins, err := readRequiredSlice(corsValues, keycfg.SharedCORSAllowOrigins)
 	if err != nil {
 		return fmt.Errorf("invalid cors config: %w", err)
 	}
-	allowMethods, err := readRequiredSlice(corsValues, "allow_methods")
+	allowMethods, err := readRequiredSlice(corsValues, keycfg.SharedCORSAllowMethods)
 	if err != nil {
 		return fmt.Errorf("invalid cors config: %w", err)
 	}
-	allowHeaders, err := readRequiredSlice(corsValues, "allow_headers")
+	allowHeaders, err := readRequiredSlice(corsValues, keycfg.SharedCORSAllowHeaders)
 	if err != nil {
 		return fmt.Errorf("invalid cors config: %w", err)
 	}
-	exposeHeaders, err := readRequiredSlice(corsValues, "expose_headers")
+	exposeHeaders, err := readRequiredSlice(corsValues, keycfg.SharedCORSExposeHeader)
 	if err != nil {
 		return fmt.Errorf("invalid cors config: %w", err)
 	}
-	allowCredentials, err := readRequiredBool(corsValues, "allow_credentials")
+	allowCredentials, err := readRequiredBool(corsValues, keycfg.SharedCORSAllowCreds)
 	if err != nil {
 		return fmt.Errorf("invalid cors config: %w", err)
 	}
-	maxAge, err := readRequiredDuration(corsValues, "max_age")
+	maxAge, err := readRequiredDuration(corsValues, keycfg.SharedCORSMaxAge)
 	if err != nil {
 		return fmt.Errorf("invalid cors config: %w", err)
 	}

@@ -11,10 +11,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
-
-const defaultTelegramBaseURL = "https://api.telegram.org"
 
 type Client struct {
 	baseURL string
@@ -24,10 +21,6 @@ type Client struct {
 }
 
 func NewClient(cfg *config.TelegramCfg) (*Client, error) {
-	if cfg == nil || !cfg.Enable {
-		logger.SysDebug("telegram.init", "telegram notifier disabled")
-		return nil, nil
-	}
 
 	token := strings.TrimSpace(cfg.BotToken)
 	chatID := strings.TrimSpace(cfg.ChatID)
@@ -40,22 +33,12 @@ func NewClient(cfg *config.TelegramCfg) (*Client, error) {
 		return nil, errors.New("telegram chat id is required when TELEGRAM_ENABLE=true")
 	}
 
-	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
-	if baseURL == "" {
-		baseURL = defaultTelegramBaseURL
-	}
-
-	timeout := cfg.HTTPTimeout
-	if timeout <= 0 {
-		timeout = 5 * time.Second
-	}
-
 	client := &Client{
-		baseURL: baseURL,
+		baseURL: cfg.BaseURL,
 		token:   token,
 		chatID:  chatID,
 		http: &http.Client{
-			Timeout: timeout,
+			Timeout: cfg.HTTPTimeout,
 		},
 	}
 

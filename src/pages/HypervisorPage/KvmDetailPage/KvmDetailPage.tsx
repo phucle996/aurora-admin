@@ -112,24 +112,20 @@ export default function KvmDetailPage() {
     diskChartSamples,
     diskCount,
     primaryDiskLabel,
-    diskCurrentMBps,
-    diskAverageMBps,
-    diskPeakMBps,
-    diskCurrentIops,
-    diskReadMBps,
-    diskWriteMBps,
+    diskReadBytesCounter,
+    diskWriteBytesCounter,
+    diskReadIosCounter,
+    diskWriteIosCounter,
+    diskIoTimeMsCounter,
     networkChartSamples,
     nicCount,
     primaryNicLabel,
-    networkCurrentMBps,
-    networkAverageMBps,
-    networkPeakMBps,
-    networkRxMBps,
-    networkTxMBps,
+    networkRxBytesCounter,
+    networkTxBytesCounter,
+    networkRxPacketsCounter,
+    networkTxPacketsCounter,
     gpuCount,
     gpuModel,
-    gpuUsagePct,
-    gpuMemoryUsedBytes,
     gpuMemoryTotalBytes,
   } = useKvmNodeMetrics({
     nodeId,
@@ -496,12 +492,11 @@ export default function KvmDetailPage() {
             samples={diskChartSamples}
             diskCount={diskCount}
             primaryDiskLabel={primaryDiskLabel}
-            currentMBps={diskCurrentMBps}
-            averageMBps={diskAverageMBps}
-            peakMBps={diskPeakMBps}
-            currentIops={diskCurrentIops}
-            readMBps={diskReadMBps}
-            writeMBps={diskWriteMBps}
+            readBytesCounter={diskReadBytesCounter}
+            writeBytesCounter={diskWriteBytesCounter}
+            readIosCounter={diskReadIosCounter}
+            writeIosCounter={diskWriteIosCounter}
+            ioTimeMsCounter={diskIoTimeMsCounter}
           />
 
           <KvmNetworkRealtimeSection
@@ -520,11 +515,10 @@ export default function KvmDetailPage() {
             samples={networkChartSamples}
             nicCount={nicCount}
             primaryNicLabel={primaryNicLabel}
-            currentMBps={networkCurrentMBps}
-            averageMBps={networkAverageMBps}
-            peakMBps={networkPeakMBps}
-            rxMBps={networkRxMBps}
-            txMBps={networkTxMBps}
+            rxBytesCounter={networkRxBytesCounter}
+            txBytesCounter={networkTxBytesCounter}
+            rxPacketsCounter={networkRxPacketsCounter}
+            txPacketsCounter={networkTxPacketsCounter}
           />
 
           <KvmGpuCardSection
@@ -533,8 +527,6 @@ export default function KvmDetailPage() {
             textMuted={textMuted}
             gpuCount={gpuCount}
             gpuModel={gpuModel}
-            gpuUsagePct={gpuUsagePct}
-            gpuMemoryUsedBytes={gpuMemoryUsedBytes}
             gpuMemoryTotalBytes={gpuMemoryTotalBytes}
           />
         </section>

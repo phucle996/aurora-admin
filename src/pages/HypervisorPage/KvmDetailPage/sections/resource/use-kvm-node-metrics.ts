@@ -9,18 +9,18 @@ import {
 import { isRequestCanceled } from "@/lib/api";
 import type { KvmNodeHistoryRow } from "@/pages/HypervisorPage/KvmDetailPage/sections/KvmNodeHistorySection";
 import {
-  buildNodeLiteMetricsView,
+  buildNodeRawMetricsView,
   CHART_RANGE_OPTIONS,
   MAX_POINTS,
-  mergeLiteSeries,
-  normalizeLiteSeriesWindow,
+  mergeRawSeries,
+  normalizeRawSeriesWindow,
   type ChartDateRange,
   type ChartRangePreset,
   type KvmCpuChartSample,
   type KvmDiskChartSample,
   type KvmNetworkChartSample,
   type KvmRamChartSample,
-} from "@/pages/HypervisorPage/KvmDetailPage/sections/resource/kvm-node-lite-metrics";
+} from "@/pages/HypervisorPage/KvmDetailPage/sections/resource/kvm-node-raw-metrics";
 
 export { CHART_RANGE_OPTIONS };
 export type { ChartDateRange, ChartRangePreset };
@@ -73,26 +73,22 @@ type UseKvmNodeMetricsResult = {
   diskChartSamples: KvmDiskChartSample[];
   diskCount: number;
   primaryDiskLabel: string;
-  diskCurrentMBps: number;
-  diskAverageMBps: number;
-  diskPeakMBps: number;
-  diskCurrentIops: number;
-  diskReadMBps: number;
-  diskWriteMBps: number;
+  diskReadBytesCounter: number;
+  diskWriteBytesCounter: number;
+  diskReadIosCounter: number;
+  diskWriteIosCounter: number;
+  diskIoTimeMsCounter: number;
 
   networkChartSamples: KvmNetworkChartSample[];
   nicCount: number;
   primaryNicLabel: string;
-  networkCurrentMBps: number;
-  networkAverageMBps: number;
-  networkPeakMBps: number;
-  networkRxMBps: number;
-  networkTxMBps: number;
+  networkRxBytesCounter: number;
+  networkTxBytesCounter: number;
+  networkRxPacketsCounter: number;
+  networkTxPacketsCounter: number;
 
   gpuCount: number;
   gpuModel: string;
-  gpuUsagePct: number;
-  gpuMemoryUsedBytes: number;
   gpuMemoryTotalBytes: number;
 };
 
@@ -318,7 +314,7 @@ export function useKvmNodeMetrics({
         }
 
         setSeries(
-          normalizeLiteSeriesWindow(
+          normalizeRawSeriesWindow(
             payload.nodeSeries ?? [],
             Math.max(MAX_POINTS, targetPoints * 2),
           ),
@@ -384,7 +380,7 @@ export function useKvmNodeMetrics({
 
       wsBufferRef.current = [];
       setSeries((prev) =>
-        mergeLiteSeries(prev, buffered, Math.max(MAX_POINTS, targetPoints * 2)),
+        mergeRawSeries(prev, buffered, Math.max(MAX_POINTS, targetPoints * 2)),
       );
     }, FLUSH_INTERVAL_MS);
 
@@ -394,7 +390,7 @@ export function useKvmNodeMetrics({
   }, [nodeId, targetPoints]);
 
   return useMemo(() => {
-    const view = buildNodeLiteMetricsView({
+    const view = buildNodeRawMetricsView({
       series,
       hardwareInfo,
       cpuChartRange,
@@ -441,26 +437,22 @@ export function useKvmNodeMetrics({
       diskChartSamples: view.diskChartSamples,
       diskCount: view.diskCount,
       primaryDiskLabel: view.primaryDiskLabel,
-      diskCurrentMBps: view.diskCurrentMBps,
-      diskAverageMBps: view.diskAverageMBps,
-      diskPeakMBps: view.diskPeakMBps,
-      diskCurrentIops: view.diskCurrentIops,
-      diskReadMBps: view.diskReadMBps,
-      diskWriteMBps: view.diskWriteMBps,
+      diskReadBytesCounter: view.diskReadBytesCounter,
+      diskWriteBytesCounter: view.diskWriteBytesCounter,
+      diskReadIosCounter: view.diskReadIosCounter,
+      diskWriteIosCounter: view.diskWriteIosCounter,
+      diskIoTimeMsCounter: view.diskIoTimeMsCounter,
 
       networkChartSamples: view.networkChartSamples,
       nicCount: view.nicCount,
       primaryNicLabel: view.primaryNicLabel,
-      networkCurrentMBps: view.networkCurrentMBps,
-      networkAverageMBps: view.networkAverageMBps,
-      networkPeakMBps: view.networkPeakMBps,
-      networkRxMBps: view.networkRxMBps,
-      networkTxMBps: view.networkTxMBps,
+      networkRxBytesCounter: view.networkRxBytesCounter,
+      networkTxBytesCounter: view.networkTxBytesCounter,
+      networkRxPacketsCounter: view.networkRxPacketsCounter,
+      networkTxPacketsCounter: view.networkTxPacketsCounter,
 
       gpuCount: view.gpuCount,
       gpuModel: view.gpuModel,
-      gpuUsagePct: view.gpuUsagePct,
-      gpuMemoryUsedBytes: view.gpuMemoryUsedBytes,
       gpuMemoryTotalBytes: view.gpuMemoryTotalBytes,
     };
   }, [

@@ -6,6 +6,9 @@ import { ThemeProvider } from "next-themes";
 import "./index.css";
 import App from "./App.tsx";
 import { EnabledModulesProvider } from "@/state/enabled-modules-context";
+import { setupGlobalUnauthorizedInterceptor } from "@/lib/admin-auth";
+
+setupGlobalUnauthorizedInterceptor();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

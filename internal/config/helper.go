@@ -95,12 +95,10 @@ func loadPrefixedValues(ctx context.Context, cli *clientv3.Client, prefix string
 	out := make(map[string]string, len(resp.Kvs))
 	for _, kv := range resp.Kvs {
 		rawKey := strings.TrimSpace(string(kv.Key))
-		relative := strings.TrimPrefix(rawKey, cleanPrefix+"/")
-		relative = strings.TrimSpace(relative)
-		if relative == "" {
+		if rawKey == "" {
 			continue
 		}
-		out[relative] = strings.TrimSpace(string(kv.Value))
+		out[rawKey] = strings.TrimSpace(string(kv.Value))
 	}
 	return out, nil
 }

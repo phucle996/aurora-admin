@@ -13,6 +13,11 @@ ENV_FILE="${AURORA_ADMIN_ENV_FILE:-/etc/aurora-admin.env}"
 SERVICE_USER="${AURORA_ADMIN_SERVICE_USER:-aurora}"
 SERVICE_GROUP="${AURORA_ADMIN_SERVICE_GROUP:-aurora}"
 SERVICE_HOME="${AURORA_ADMIN_SERVICE_HOME:-/var/lib/aurora}"
+TLS_DIR="${AURORA_ADMIN_TLS_DIR:-/etc/aurora/certs}"
+TLS_CERT_FILE="${TLS_DIR}/admin.crt"
+TLS_KEY_FILE="${TLS_DIR}/admin.key"
+TLS_CA_FILE="${TLS_DIR}/ca.crt"
+TLS_CA_KEY_FILE="${TLS_DIR}/ca.key"
 
 CONFIG_OUTPUT="${AURORA_ADMIN_CONFIG_OUTPUT:-./aurora-admin.env.sample}"
 INPUT_ENV_FILE=""
@@ -162,6 +167,21 @@ verify_checksum() {
   [ "$actual" = "$expected" ] || die "checksum mismatch for ${asset}"
 }
 
+read_env_value() {
+  local key="$1"
+  local file="$2"
+  local line
+  line="$(grep -E "^${key}=" "$file" | tail -n1 || true)"
+  if [ -z "$line" ]; then
+    printf '%s' ""
+    return
+  fi
+  line="${line#*=}"
+  line="${line%\"}"
+  line="${line#\"}"
+  printf '%s' "$line"
+}
+
 ensure_service_group() {
   if getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
     return
@@ -247,7 +267,6 @@ ETCD_MAX_CALL_SEND_MSG_SIZE=2097152
 ETCD_MAX_CALL_RECV_MSG_SIZE=2097152
 
 DATABASE_URL=
-DB_SCHEMA=public
 DB_SSLMODE=disable
 
 REDIS_ADDR=127.0.0.1:6379
@@ -260,28 +279,10 @@ REDIS_TLS_CERT=
 REDIS_TLS_KEY=
 REDIS_TLS_INSECURE=false
 
-ADMIN_APIKEY_ROTATE_INTERVAL=72h
-ADMIN_TOKEN_SECRET_ACCESS_ROTATE_INTERVAL=72h
-ADMIN_TOKEN_SECRET_REFRESH_ROTATE_INTERVAL=168h
-ADMIN_TOKEN_SECRET_DEVICE_ROTATE_INTERVAL=336h
-
-ADMIN_TOKEN_ACCESS_TTL=15m
-ADMIN_TOKEN_REFRESH_TTL=168h
-ADMIN_TOKEN_DEVICE_TTL=15m
-ADMIN_TOKEN_OTT_TTL=15m
-
 TELEGRAM_ENABLE=false
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
-TELEGRAM_BASE_URL=https://api.telegram.org
-TELEGRAM_HTTP_TIMEOUT=5s
 
-CORS_ALLOW_ORIGINS=http://localhost:5173,https://aurora.local,https://admin.aurora.local
-CORS_ALLOW_METHODS=GET,POST,PUT,PATCH,DELETE,HEAD,OPTIONS
-CORS_ALLOW_HEADERS=Origin,Content-Type,Accept,Authorization
-CORS_EXPOSE_HEADERS=
-CORS_ALLOW_CREDENTIALS=true
-CORS_MAX_AGE=12h
 ENV_TPL
   chmod 600 "$out"
 }
@@ -314,6 +315,60 @@ install_env_file() {
   [ -f "$source_env" ] || die "env file not found: ${source_env}"
 
   as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$source_env" "$ENV_FILE"
+}
+
+install_tls_materials() {
+  local env_file="$1"
+  local app_host cert_tmp key_tmp ca_tmp ca_key_tmp csr_tmp ext_tmp
+  app_host="$(read_env_value "APP_HOSTNAME" "$env_file")"
+  [ -n "$app_host" ] || app_host="aurora-admin.local"
+
+  cert_tmp="${TMP_DIR}/admin.crt"
+  key_tmp="${TMP_DIR}/admin.key"
+  ca_tmp="${TMP_DIR}/ca.crt"
+  ca_key_tmp="${TMP_DIR}/ca.key"
+  csr_tmp="${TMP_DIR}/admin.csr"
+  ext_tmp="${TMP_DIR}/admin.ext"
+
+  log "generate self-signed tls cert/key/ca"
+  openssl genrsa -out "$ca_key_tmp" 4096 >/dev/null 2>&1
+  openssl req -x509 -new -nodes \
+    -key "$ca_key_tmp" \
+    -sha256 \
+    -days 3650 \
+    -out "$ca_tmp" \
+    -subj "/CN=Aurora Admin CA" >/dev/null 2>&1
+
+  openssl genrsa -out "$key_tmp" 2048 >/dev/null 2>&1
+  openssl req -new \
+    -key "$key_tmp" \
+    -out "$csr_tmp" \
+    -subj "/CN=${app_host}" >/dev/null 2>&1
+
+  cat > "$ext_tmp" <<EOF
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName = DNS:${app_host},DNS:localhost,IP:127.0.0.1
+EOF
+
+  openssl x509 -req \
+    -in "$csr_tmp" \
+    -CA "$ca_tmp" \
+    -CAkey "$ca_key_tmp" \
+    -CAcreateserial \
+    -out "$cert_tmp" \
+    -days 825 \
+    -sha256 \
+    -extfile "$ext_tmp" >/dev/null 2>&1
+
+  as_root mkdir -p "$TLS_DIR"
+  as_root chown root:"$SERVICE_GROUP" "$TLS_DIR"
+  as_root chmod 750 "$TLS_DIR"
+  as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$cert_tmp" "$TLS_CERT_FILE"
+  as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$key_tmp" "$TLS_KEY_FILE"
+  as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$ca_tmp" "$TLS_CA_FILE"
+  as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$ca_key_tmp" "$TLS_CA_KEY_FILE"
 }
 
 install_systemd_service() {
@@ -362,6 +417,7 @@ main() {
   require_cmd tar
   require_cmd sha256sum
   require_cmd systemctl
+  require_cmd openssl
 
   TMP_DIR="$(mktemp -d)"
   local machine_arch tag
@@ -372,6 +428,7 @@ main() {
   ensure_service_user
   install_binary "$tag" "$machine_arch"
   install_env_file "$INPUT_ENV_FILE"
+  install_tls_materials "$ENV_FILE"
   install_systemd_service "$tag"
   delete_source_env_if_needed "$INPUT_ENV_FILE"
 

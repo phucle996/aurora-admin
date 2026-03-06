@@ -1,6 +1,7 @@
 package config
 
 import (
+	keycfg "admin/internal/key"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,8 +14,6 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
-const adminEndpointKey = "/endpoint/admin"
-
 func SeedRuntimeToEtcdIfAbsent(ctx context.Context, cli *clientv3.Client, cfg *Config) error {
 	if cfg == nil {
 		return errors.New("config is nil")
@@ -24,48 +23,51 @@ func SeedRuntimeToEtcdIfAbsent(ctx context.Context, cli *clientv3.Client, cfg *C
 	}
 
 	runtimeValues := map[string]string{
-		"app/timezone":                         strings.TrimSpace(cfg.App.TimeZone),
-		"postgresql/url":                       strings.TrimSpace(cfg.Database.URL),
-		"postgresql/sslmode":                   strings.TrimSpace(cfg.Database.SSLMode),
-		"apikey/rotate_interval":               cfg.APIKey.RotateInterval.String(),
-		"redis/addr":                           strings.TrimSpace(cfg.Redis.Addr),
-		"redis/username":                       strings.TrimSpace(cfg.Redis.Username),
-		"redis/password":                       strings.TrimSpace(cfg.Redis.Password),
-		"redis/db":                             strconv.Itoa(cfg.Redis.DB),
-		"redis/use_tls":                        strconv.FormatBool(cfg.Redis.UseTLS),
-		"redis/ca":                             strings.TrimSpace(cfg.Redis.CA),
-		"redis/client_key":                     strings.TrimSpace(cfg.Redis.ClientKey),
-		"redis/client_cert":                    strings.TrimSpace(cfg.Redis.ClientCert),
-		"redis/insecure_skip_verify":           strconv.FormatBool(cfg.Redis.InsecureSkipVerify),
-		"etcd/endpoints":                       encodeStringSlice(cfg.Etcd.Endpoints),
-		"etcd/auto_sync_interval":              cfg.Etcd.AutoSyncInterval.String(),
-		"etcd/dial_timeout":                    cfg.Etcd.DialTimeout.String(),
-		"etcd/dial_keepalive_time":             cfg.Etcd.DialKeepAliveTime.String(),
-		"etcd/dial_keepalive_timeout":          cfg.Etcd.DialKeepAliveTimeout.String(),
-		"etcd/username":                        strings.TrimSpace(cfg.Etcd.Username),
-		"etcd/password":                        strings.TrimSpace(cfg.Etcd.Password),
-		"etcd/use_tls":                         strconv.FormatBool(cfg.Etcd.UseTLS),
-		"etcd/ca":                              strings.TrimSpace(cfg.Etcd.CA),
-		"etcd/client_key":                      strings.TrimSpace(cfg.Etcd.ClientKey),
-		"etcd/client_cert":                     strings.TrimSpace(cfg.Etcd.ClientCert),
-		"etcd/server_name":                     strings.TrimSpace(cfg.Etcd.ServerName),
-		"etcd/insecure_skip_verify":            strconv.FormatBool(cfg.Etcd.InsecureSkipVerify),
-		"etcd/permit_without_stream":           strconv.FormatBool(cfg.Etcd.PermitWithoutStream),
-		"etcd/reject_old_cluster":              strconv.FormatBool(cfg.Etcd.RejectOldCluster),
-		"etcd/max_call_send_msg_size":          strconv.Itoa(cfg.Etcd.MaxCallSendMsgSize),
-		"etcd/max_call_recv_msg_size":          strconv.Itoa(cfg.Etcd.MaxCallRecvMsgSize),
-		"telegram/enable":                      strconv.FormatBool(cfg.Telegram.Enable),
-		"telegram/bot_token":                   strings.TrimSpace(cfg.Telegram.BotToken),
-		"telegram/chat_id":                     strings.TrimSpace(cfg.Telegram.ChatID),
-		"token_secret/access_rotate_interval":  cfg.TokenSecret.AccessRotateInterval.String(),
-		"token_secret/refresh_rotate_interval": cfg.TokenSecret.RefreshRotateInterval.String(),
-		"token_secret/device_rotate_interval":  cfg.TokenSecret.DeviceRotateInterval.String(),
-		"token_ttl/access_ttl":                 cfg.TokenTTL.AccessTTL.String(),
-		"token_ttl/refresh_ttl":                cfg.TokenTTL.RefreshTTL.String(),
-		"token_ttl/device_ttl":                 cfg.TokenTTL.DeviceTTL.String(),
-		"token_ttl/ott_ttl":                    cfg.TokenTTL.OttTTL.String(),
+		keycfg.RTAppTZ:                  strings.TrimSpace(cfg.App.TimeZone),
+		keycfg.RTAppLogLevel:            strings.TrimSpace(cfg.App.LogLV),
+		keycfg.RTPgURL:                  strings.TrimSpace(cfg.Database.URL),
+		keycfg.RTPgSSLMode:              strings.TrimSpace(cfg.Database.SSLMode),
+		keycfg.RTAPIKeyRotateEvery:      cfg.APIKey.RotateInterval.String(),
+		keycfg.RTRedisAddr:              strings.TrimSpace(cfg.Redis.Addr),
+		keycfg.RTRedisUser:              strings.TrimSpace(cfg.Redis.Username),
+		keycfg.RTRedisPass:              strings.TrimSpace(cfg.Redis.Password),
+		keycfg.RTRedisDB:                strconv.Itoa(cfg.Redis.DB),
+		keycfg.RTRedisTLS:               strconv.FormatBool(cfg.Redis.UseTLS),
+		keycfg.RTRedisCA:                strings.TrimSpace(cfg.Redis.CA),
+		keycfg.RTRedisKey:               strings.TrimSpace(cfg.Redis.ClientKey),
+		keycfg.RTRedisCert:              strings.TrimSpace(cfg.Redis.ClientCert),
+		keycfg.RTRedisInsecure:          strconv.FormatBool(cfg.Redis.InsecureSkipVerify),
+		keycfg.RTEtcdEndpoints:          encodeStringSlice(cfg.Etcd.Endpoints),
+		keycfg.RTEtcdAutoSync:           cfg.Etcd.AutoSyncInterval.String(),
+		keycfg.RTEtcdDialTimeout:        cfg.Etcd.DialTimeout.String(),
+		keycfg.RTEtcdKeepAliveTime:      cfg.Etcd.DialKeepAliveTime.String(),
+		keycfg.RTEtcdKeepAliveTimeout:   cfg.Etcd.DialKeepAliveTimeout.String(),
+		keycfg.RTEtcdUser:               strings.TrimSpace(cfg.Etcd.Username),
+		keycfg.RTEtcdPass:               strings.TrimSpace(cfg.Etcd.Password),
+		keycfg.RTEtcdTLS:                strconv.FormatBool(cfg.Etcd.UseTLS),
+		keycfg.RTEtcdCA:                 strings.TrimSpace(cfg.Etcd.CA),
+		keycfg.RTEtcdKey:                strings.TrimSpace(cfg.Etcd.ClientKey),
+		keycfg.RTEtcdCert:               strings.TrimSpace(cfg.Etcd.ClientCert),
+		keycfg.RTEtcdServerName:         strings.TrimSpace(cfg.Etcd.ServerName),
+		keycfg.RTEtcdInsecure:           strconv.FormatBool(cfg.Etcd.InsecureSkipVerify),
+		keycfg.RTEtcdPermitNoStream:     strconv.FormatBool(cfg.Etcd.PermitWithoutStream),
+		keycfg.RTEtcdRejectOldCluster:   strconv.FormatBool(cfg.Etcd.RejectOldCluster),
+		keycfg.RTEtcdMaxCallSendMsgSize: strconv.Itoa(cfg.Etcd.MaxCallSendMsgSize),
+		keycfg.RTEtcdMaxCallRecvMsgSize: strconv.Itoa(cfg.Etcd.MaxCallRecvMsgSize),
+		keycfg.RTTelegramBotToken:       strings.TrimSpace(cfg.Telegram.BotToken),
+		keycfg.RTTelegramChatID:         strings.TrimSpace(cfg.Telegram.ChatID),
+		keycfg.RTSecretRotateAccess:     cfg.TokenSecret.AccessRotateInterval.String(),
+		keycfg.RTSecretRotateRefresh:    cfg.TokenSecret.RefreshRotateInterval.String(),
+		keycfg.RTSecretRotateDevice:     cfg.TokenSecret.DeviceRotateInterval.String(),
+		keycfg.RTTTLAccess:              cfg.TokenTTL.AccessTTL.String(),
+		keycfg.RTTTLRefresh:             cfg.TokenTTL.RefreshTTL.String(),
+		keycfg.RTTTLDevice:              cfg.TokenTTL.DeviceTTL.String(),
+		keycfg.RTTTLOTT:                 cfg.TokenTTL.OttTTL.String(),
+		keycfg.RTSecretCachePrefix:      "aurora:token-secret",
+		keycfg.RTSecretCacheChannel:     "aurora:token-secret:invalidate",
+		keycfg.RTSecretPollEvery:        "10s",
 	}
-	if err := seedPrefixedValuesIfAbsent(ctx, cli, runtimeConfigPrefix, runtimeValues); err != nil {
+	if err := seedValuesIfAbsent(ctx, cli, runtimeValues); err != nil {
 		return fmt.Errorf("seed runtime config failed: %w", err)
 	}
 
@@ -75,18 +77,18 @@ func SeedRuntimeToEtcdIfAbsent(ctx context.Context, cli *clientv3.Client, cfg *C
 	}
 
 	corsValues := map[string]string{
-		"allow_origins":     encodeStringSlice(allowOrigins),
-		"allow_methods":     encodeStringSlice(cfg.Cors.AllowMethods),
-		"allow_headers":     encodeStringSlice(cfg.Cors.AllowHeaders),
-		"expose_headers":    encodeStringSlice(cfg.Cors.ExposeHeaders),
-		"allow_credentials": strconv.FormatBool(cfg.Cors.AllowCredentials),
-		"max_age":           cfg.Cors.MaxAge.String(),
+		keycfg.SharedCORSAllowOrigins: encodeStringSlice(allowOrigins),
+		keycfg.SharedCORSAllowMethods: encodeStringSlice(cfg.Cors.AllowMethods),
+		keycfg.SharedCORSAllowHeaders: encodeStringSlice(cfg.Cors.AllowHeaders),
+		keycfg.SharedCORSExposeHeader: encodeStringSlice(cfg.Cors.ExposeHeaders),
+		keycfg.SharedCORSAllowCreds:   strconv.FormatBool(cfg.Cors.AllowCredentials),
+		keycfg.SharedCORSMaxAge:       cfg.Cors.MaxAge.String(),
 	}
-	if err := seedPrefixedValuesIfAbsent(ctx, cli, sharedCorsPrefix, corsValues); err != nil {
+	if err := seedValuesIfAbsent(ctx, cli, corsValues); err != nil {
 		return fmt.Errorf("seed shared cors config failed: %w", err)
 	}
 	if endpoint := buildEndpointFromHostPort(cfg.App.HostName, cfg.App.Port); endpoint != "" {
-		if err := putIfAbsentCAS(ctx, cli, adminEndpointKey, "running:"+endpoint); err != nil {
+		if err := putIfAbsentCAS(ctx, cli, keycfg.EndpointAdminKey, "running:"+endpoint); err != nil {
 			return fmt.Errorf("seed admin endpoint failed: %w", err)
 		}
 	}
@@ -94,35 +96,21 @@ func SeedRuntimeToEtcdIfAbsent(ctx context.Context, cli *clientv3.Client, cfg *C
 	return nil
 }
 
-func seedPrefixedValuesIfAbsent(
-	ctx context.Context,
-	cli *clientv3.Client,
-	prefix string,
-	values map[string]string,
-) error {
-	cleanPrefix := strings.TrimRight(strings.TrimSpace(prefix), "/")
-	if cleanPrefix == "" {
-		return errors.New("prefix is empty")
-	}
-
+func seedValuesIfAbsent(ctx context.Context, cli *clientv3.Client, values map[string]string) error {
 	keys := make([]string, 0, len(values))
 	for k := range values {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 
-	for _, relKey := range keys {
-		relKey = strings.Trim(strings.TrimSpace(relKey), "/")
-		if relKey == "" {
+	for _, fullKey := range keys {
+		fullKey = strings.TrimSpace(fullKey)
+		if fullKey == "" || !strings.HasPrefix(fullKey, "/") {
 			continue
 		}
 
-		val := strings.TrimSpace(values[relKey])
-		if val == "" {
-			continue
-		}
+		val := strings.TrimSpace(values[fullKey])
 
-		fullKey := cleanPrefix + "/" + relKey
 		if err := putIfAbsentCAS(ctx, cli, fullKey, val); err != nil {
 			return fmt.Errorf("seed key %s: %w", fullKey, err)
 		}

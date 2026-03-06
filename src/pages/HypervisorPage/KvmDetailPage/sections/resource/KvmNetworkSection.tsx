@@ -16,7 +16,7 @@ import {
   CardHeader,
 } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import type { KvmNetworkChartSample } from "@/pages/HypervisorPage/KvmDetailPage/sections/resource/kvm-node-lite-metrics";
+import type { KvmNetworkChartSample } from "@/pages/HypervisorPage/KvmDetailPage/sections/resource/kvm-node-raw-metrics";
 
 type KvmNetworkRealtimeSectionProps = {
   panelClass: string;
@@ -25,44 +25,46 @@ type KvmNetworkRealtimeSectionProps = {
   samples: KvmNetworkChartSample[];
   nicCount?: number;
   primaryNicLabel?: string;
-  currentMBps: number;
-  averageMBps: number;
-  peakMBps: number;
-  rxMBps: number;
-  txMBps: number;
+  rxBytesCounter: number;
+  txBytesCounter: number;
+  rxPacketsCounter: number;
+  txPacketsCounter: number;
   rangeControl?: ReactNode;
 };
 
-type KvmNetworkMetricKey =
-  | "throughputMBps"
-  | "rxMBps"
-  | "txMBps"
-  | "packetRate";
+type KvmNetworkMetricKey = Exclude<keyof KvmNetworkChartSample, "timestamp">;
 
 type KvmNetworkMetricDefinition = {
   key: KvmNetworkMetricKey;
   label: string;
-  unit: string;
-  decimals: number;
+  mode: "bytes" | "count";
 };
 
 const NETWORK_METRICS: KvmNetworkMetricDefinition[] = [
-  { key: "throughputMBps", label: "Throughput", unit: "MB/s", decimals: 2 },
-  { key: "rxMBps", label: "RX", unit: "MB/s", decimals: 2 },
-  { key: "txMBps", label: "TX", unit: "MB/s", decimals: 2 },
-  { key: "packetRate", label: "Packets", unit: "/s", decimals: 0 },
+  { key: "rxBytes", label: "RX bytes", mode: "bytes" },
+  { key: "txBytes", label: "TX bytes", mode: "bytes" },
+  { key: "rxPackets", label: "RX packets", mode: "count" },
+  { key: "txPackets", label: "TX packets", mode: "count" },
 ];
 
 function formatNetworkMetricValue(
   value: number,
   metric: KvmNetworkMetricDefinition,
 ): string {
-  const normalized = Number.isFinite(value) ? value : 0;
-  const body =
-    metric.decimals <= 0
-      ? Math.round(normalized).toLocaleString()
-      : normalized.toFixed(metric.decimals);
-  return metric.unit ? `${body} ${metric.unit}` : body;
+  const normalized = Number.isFinite(value) && value > 0 ? value : 0;
+  if (metric.mode === "bytes") {
+    if (normalized >= 1024 ** 3) {
+      return `${(normalized / 1024 ** 3).toFixed(2)} GiB`;
+    }
+    if (normalized >= 1024 ** 2) {
+      return `${(normalized / 1024 ** 2).toFixed(2)} MiB`;
+    }
+    if (normalized >= 1024) {
+      return `${(normalized / 1024).toFixed(2)} KiB`;
+    }
+    return `${Math.round(normalized)} B`;
+  }
+  return Math.round(normalized).toLocaleString();
 }
 
 export function KvmNetworkRealtimeSection({
@@ -72,16 +74,15 @@ export function KvmNetworkRealtimeSection({
   samples,
   nicCount = 0,
   primaryNicLabel = "",
-  currentMBps,
-  averageMBps,
-  peakMBps,
-  rxMBps,
-  txMBps,
+  rxBytesCounter,
+  txBytesCounter,
+  rxPacketsCounter,
+  txPacketsCounter,
   rangeControl,
 }: KvmNetworkRealtimeSectionProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [selectedMetricKey, setSelectedMetricKey] =
-    useState<KvmNetworkMetricKey>("throughputMBps");
+    useState<KvmNetworkMetricKey>("rxBytes");
 
   const selectedMetric = useMemo(
     () =>
@@ -102,10 +103,10 @@ export function KvmNetworkRealtimeSection({
   const latestRow = samples.length > 0 ? samples[samples.length - 1] : null;
 
   const fallbackMetricValues: Record<KvmNetworkMetricKey, number> = {
-    throughputMBps: currentMBps,
-    rxMBps,
-    txMBps,
-    packetRate: 0,
+    rxBytes: rxBytesCounter,
+    txBytes: txBytesCounter,
+    rxPackets: rxPacketsCounter,
+    txPackets: txPacketsCounter,
   };
 
   return (
@@ -293,23 +294,6 @@ export function KvmNetworkRealtimeSection({
                     </button>
                   );
                 })}
-
-                <div className="rounded-md border border-black/10 bg-black/[0.03] px-2 py-2 dark:border-white/10 dark:bg-white/[0.03]">
-                  <p className={cn("text-sm pl-2", textMuted)}>
-                    Average throughput
-                  </p>
-                  <p className={cn("text-xl pl-2 font-semibold", textPrimary)}>
-                    {averageMBps.toFixed(2)} MB/s
-                  </p>
-                </div>
-                <div className="rounded-md border border-black/10 bg-black/[0.03] px-2 py-2 dark:border-white/10 dark:bg-white/[0.03]">
-                  <p className={cn("text-sm pl-2", textMuted)}>
-                    Peak throughput
-                  </p>
-                  <p className={cn("text-xl pl-2 font-semibold", textPrimary)}>
-                    {peakMBps.toFixed(2)} MB/s
-                  </p>
-                </div>
               </div>
             </div>
           )}

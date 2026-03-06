@@ -16,7 +16,7 @@ import {
   CardHeader,
 } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import type { KvmRamChartSample } from "@/pages/HypervisorPage/KvmDetailPage/sections/resource/kvm-node-lite-metrics";
+import type { KvmRamChartSample } from "@/pages/HypervisorPage/KvmDetailPage/sections/resource/kvm-node-raw-metrics";
 
 type KvmRamRealtimeSectionProps = {
   panelClass: string;
@@ -26,30 +26,40 @@ type KvmRamRealtimeSectionProps = {
   rangeControl?: ReactNode;
 };
 
-type KvmRamMetricKey = "usagePct" | "usedGb" | "totalGb";
+type KvmRamMetricKey = Exclude<keyof KvmRamChartSample, "timestamp">;
 
 type KvmRamMetricDefinition = {
   key: KvmRamMetricKey;
   label: string;
-  unit: string;
-  decimals: number;
+  mode: "bytes";
 };
 
 const RAM_METRICS: KvmRamMetricDefinition[] = [
-  { key: "usagePct", label: "RAM usage", unit: "%", decimals: 2 },
-  { key: "usedGb", label: "RAM used", unit: "GB", decimals: 2 },
+  { key: "usedBytes", label: "RAM used", mode: "bytes" },
+  { key: "availableBytes", label: "RAM available", mode: "bytes" },
+  { key: "totalBytes", label: "RAM total", mode: "bytes" },
+  { key: "swapUsedBytes", label: "Swap used", mode: "bytes" },
+  { key: "swapTotalBytes", label: "Swap total", mode: "bytes" },
 ];
 
 function formatRamValue(
   value: number,
   definition: KvmRamMetricDefinition,
 ): string {
-  const normalized = Number.isFinite(value) ? value : 0;
-  const body =
-    definition.decimals <= 0
-      ? Math.round(normalized).toLocaleString()
-      : normalized.toFixed(definition.decimals);
-  return definition.unit ? `${body} ${definition.unit}` : body;
+  const normalized = Number.isFinite(value) && value > 0 ? value : 0;
+  if (definition.mode !== "bytes") {
+    return Math.round(normalized).toLocaleString();
+  }
+  if (normalized >= 1024 ** 3) {
+    return `${(normalized / 1024 ** 3).toFixed(2)} GiB`;
+  }
+  if (normalized >= 1024 ** 2) {
+    return `${(normalized / 1024 ** 2).toFixed(2)} MiB`;
+  }
+  if (normalized >= 1024) {
+    return `${(normalized / 1024).toFixed(2)} KiB`;
+  }
+  return `${Math.round(normalized)} B`;
 }
 
 export function KvmRamRealtimeSection({
@@ -61,10 +71,7 @@ export function KvmRamRealtimeSection({
 }: KvmRamRealtimeSectionProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [selectedMetricKey, setSelectedMetricKey] =
-    useState<KvmRamMetricKey>("usagePct");
-
-  const normalizedSamples = useMemo(() => samples, [samples]);
-  const filteredSamples = normalizedSamples;
+    useState<KvmRamMetricKey>("usedBytes");
 
   const chartConfig = {
     value: {
@@ -80,14 +87,14 @@ export function KvmRamRealtimeSection({
     [selectedMetricKey],
   );
 
-  const chartData = filteredSamples.map((row) => ({
+  const chartData = samples.map((row) => ({
     timestamp: row.timestamp,
     value: Math.max(0, Number(row[selectedMetric.key])),
   }));
 
   const latestRow =
-    filteredSamples.length > 0
-      ? filteredSamples[filteredSamples.length - 1]
+    samples.length > 0
+      ? samples[samples.length - 1]
       : null;
 
   return (
@@ -115,13 +122,13 @@ export function KvmRamRealtimeSection({
         </div>
         {isExpanded ? (
           <CardDescription className={cn(textMuted)}>
-            System RAM
+            System RAM and swap counters
           </CardDescription>
         ) : null}
       </CardHeader>
       {isExpanded ? (
         <CardContent>
-          {filteredSamples.length === 0 ? (
+          {samples.length === 0 ? (
             <p className={cn("text-sm", textMuted)}>
               Chua co du lieu RAM realtime.
             </p>

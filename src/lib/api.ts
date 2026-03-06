@@ -1,5 +1,6 @@
 import axios from "axios";
 import type { AxiosInstance } from "axios";
+import { handleUnauthorizedError } from "@/lib/admin-auth";
 
 const baseURL =
   import.meta.env.VITE_VM_SERVICE_BASE_URL?.toString() ??
@@ -13,6 +14,14 @@ const api: AxiosInstance = axios.create({
   },
   timeout: 10000,
 });
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    handleUnauthorizedError(error);
+    return Promise.reject(error);
+  },
+);
 
 export type ApiError = {
   message?: string;

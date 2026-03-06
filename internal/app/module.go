@@ -2,8 +2,11 @@ package app
 
 import (
 	etcdinfra "admin/infra/etcd"
+	redisinfra "admin/infra/redis"
 	telegraminfra "admin/infra/telegram"
 	"admin/internal/config"
+	keycfg "admin/internal/key"
+	installsvc "admin/internal/moduleinstall"
 	"admin/internal/repository"
 	apisvc "admin/internal/service"
 	"admin/pkg/logger"
@@ -12,18 +15,21 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 type Modules struct {
 	// Infrastructure
-	Etcd *clientv3.Client
+	Etcd  *clientv3.Client
+	Redis *redis.Client
 
 	APIKeySvc        *apisvc.APIKeyService
 	TokenSecretSvc   *apisvc.TokenSecretService
 	CertStoreSvc     *apisvc.CertStoreService
 	EnabledModuleSvc *apisvc.EnabledModuleService
-	ModuleInstallSvc *apisvc.ModuleInstallService
+	ModuleInstallSvc *installsvc.ModuleInstallService
+	RuntimeSvc       *apisvc.RuntimeBootstrapService
 }
 
 // NewModules assembles all infrastructure dependencies.
@@ -39,10 +45,16 @@ func NewModules(
 	if err != nil {
 		return nil, err
 	}
+	redisClient, err := redisinfra.NewRedis(ctx, &cfg.Redis)
+	if err != nil {
+		_ = etcdClient.Close()
+		return nil, err
+	}
 
 	telegramClient, err := telegraminfra.NewClient(&cfg.Telegram)
 	if err != nil {
 		_ = etcdClient.Close()
+		_ = redisClient.Close()
 		return nil, err
 	}
 
@@ -78,16 +90,20 @@ func NewModules(
 	apiKeySvc := apisvc.NewAPIKeyService(etcdClient, cfg.APIKey, onBootstrap, onRotate)
 	if _, err := apiKeySvc.BootstrapAPIKey(ctx); err != nil {
 		_ = etcdClient.Close()
+		_ = redisClient.Close()
 		return nil, err
 	}
 
-	tokenSecretSvc := apisvc.NewTokenSecretService(etcdClient, cfg.TokenSecret)
+	tokenSecretCacheRepo := repository.NewRedisTokenSecretCacheRepository(redisClient)
+	tokenSecretSvc := apisvc.NewTokenSecretService(etcdClient, cfg.TokenSecret, tokenSecretCacheRepo)
 	if err := tokenSecretSvc.Bootstrap(ctx); err != nil {
 		_ = etcdClient.Close()
+		_ = redisClient.Close()
 		return nil, err
 	}
 	if err := tokenSecretSvc.RotateDueSecrets(ctx); err != nil {
 		_ = etcdClient.Close()
+		_ = redisClient.Close()
 		return nil, err
 	}
 
@@ -96,17 +112,21 @@ func NewModules(
 		Prefix: cfg.CertStore.Prefix,
 	})
 
-	enabledModuleRepo := repository.NewEtcdEndpointRepository(etcdClient, "/endpoint/")
-	runtimeRepo := repository.NewEtcdRuntimeConfigRepository(etcdClient, "/runtime")
+	enabledModuleRepo := repository.NewEtcdEndpointRepository(etcdClient, keycfg.EndpointPrefix)
+	runtimeRepo := repository.NewEtcdRuntimeConfigRepository(etcdClient, keycfg.RuntimePrefix)
+	sharedCorsRepo := repository.NewEtcdRuntimeConfigRepository(etcdClient, keycfg.SharedCORSPrefix)
 	enabledModuleSvc := apisvc.NewEnabledModuleService(enabledModuleRepo)
-	moduleInstallSvc := apisvc.NewModuleInstallService(enabledModuleRepo, runtimeRepo, cfg.Database.URL)
+	moduleInstallSvc := installsvc.NewModuleInstallService(enabledModuleRepo, runtimeRepo, sharedCorsRepo, cfg.Database.URL)
+	runtimeSvc := apisvc.NewRuntimeBootstrapService(runtimeRepo, sharedCorsRepo, enabledModuleRepo)
 
 	return &Modules{
 		Etcd:             etcdClient,
+		Redis:            redisClient,
 		APIKeySvc:        apiKeySvc,
 		TokenSecretSvc:   tokenSecretSvc,
 		CertStoreSvc:     certStoreSvc,
 		EnabledModuleSvc: enabledModuleSvc,
 		ModuleInstallSvc: moduleInstallSvc,
+		RuntimeSvc:       runtimeSvc,
 	}, nil
 }

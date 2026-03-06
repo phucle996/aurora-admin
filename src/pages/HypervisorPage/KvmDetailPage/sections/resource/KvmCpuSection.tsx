@@ -16,9 +16,9 @@ import {
   CardHeader,
 } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import type { KvmCpuChartSample } from "@/pages/HypervisorPage/KvmDetailPage/sections/resource/kvm-node-lite-metrics";
+import type { KvmCpuChartSample } from "@/pages/HypervisorPage/KvmDetailPage/sections/resource/kvm-node-raw-metrics";
 
-type KvmCpuMetricKey = Exclude<keyof KvmCpuChartSample, "timestamp">;
+type KvmCpuMetricKey = Exclude<keyof KvmCpuChartSample, "timestamp" | "cpuCores">;
 
 type KvmCpuMetricDefinition = {
   key: KvmCpuMetricKey;
@@ -28,14 +28,15 @@ type KvmCpuMetricDefinition = {
 };
 
 const CPU_METRICS: KvmCpuMetricDefinition[] = [
-  { key: "cpuUsagePct", label: "CPU usage", unit: "%", decimals: 2 },
+  { key: "cpuTotal", label: "CPU total", unit: "jiffies", decimals: 0 },
+  { key: "cpuUser", label: "CPU user", unit: "jiffies", decimals: 0 },
+  { key: "cpuSystem", label: "CPU system", unit: "jiffies", decimals: 0 },
+  { key: "cpuIdle", label: "CPU idle", unit: "jiffies", decimals: 0 },
+  { key: "cpuIowait", label: "CPU iowait", unit: "jiffies", decimals: 0 },
   { key: "load1", label: "Load 1", unit: "", decimals: 2 },
   { key: "load5", label: "Load 5", unit: "", decimals: 2 },
   { key: "load15", label: "Load 15", unit: "", decimals: 2 },
-  { key: "runQueueLength", label: "Run queue", unit: "", decimals: 0 },
-  { key: "processCount", label: "Processes", unit: "", decimals: 0 },
-  { key: "threadCount", label: "Threads", unit: "", decimals: 0 },
-  { key: "systemLoadPercent", label: "System load", unit: "%", decimals: 2 },
+  { key: "uptimeSeconds", label: "Uptime", unit: "s", decimals: 0 },
 ];
 
 function formatMetricValue(
@@ -70,7 +71,7 @@ export function KvmCpuSection({
 }: KvmCpuRealtimeSectionProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [selectedMetricKey, setSelectedMetricKey] =
-    useState<KvmCpuMetricKey>("cpuUsagePct");
+    useState<KvmCpuMetricKey>("cpuTotal");
 
   const hasAnyData = useMemo(
     () =>
@@ -85,7 +86,7 @@ export function KvmCpuSection({
 
   const effectiveMetricKey: KvmCpuMetricKey = hasAnyData
     ? selectedMetricKey
-    : "cpuUsagePct";
+    : "cpuTotal";
 
   const selectedMetric = useMemo(
     () =>

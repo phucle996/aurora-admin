@@ -21,10 +21,12 @@ type RunInput struct {
 	Username   string
 	Password   *string
 	PrivateKey *string
-	Timeout    time.Duration
-	Command    string
-	OnStdout   func(line string)
-	OnStderr   func(line string)
+	// SHA256 fingerprint, example: SHA256:abc...
+	HostKeyFingerprint *string
+	Timeout            time.Duration
+	Command            string
+	OnStdout           func(line string)
+	OnStderr           func(line string)
 }
 
 type RunResult struct {
@@ -55,6 +57,10 @@ func Run(ctx context.Context, input RunInput) (*RunResult, error) {
 	if password == nil && privateKey == nil {
 		return nil, errors.New("ssh password or private key is required")
 	}
+	expectedFingerprint := normalizeFingerprintPtr(input.HostKeyFingerprint)
+	if expectedFingerprint == nil {
+		return nil, errors.New("ssh host key fingerprint is required")
+	}
 
 	authMethods := make([]xssh.AuthMethod, 0, 3)
 	if privateKey != nil {
@@ -81,7 +87,7 @@ func Run(ctx context.Context, input RunInput) (*RunResult, error) {
 	clientConfig := &xssh.ClientConfig{
 		User:            username,
 		Auth:            authMethods,
-		HostKeyCallback: xssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: hostKeyVerifyCallback(*expectedFingerprint),
 		Timeout:         timeout,
 	}
 
@@ -240,4 +246,32 @@ func normalizePasswordPtr(v *string) *string {
 	}
 	value := *v
 	return &value
+}
+
+func normalizeFingerprintPtr(v *string) *string {
+	if v == nil {
+		return nil
+	}
+	value := strings.TrimSpace(*v)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func hostKeyVerifyCallback(expected string) xssh.HostKeyCallback {
+	normalizedExpected := strings.TrimSpace(expected)
+	return func(hostname string, remote net.Addr, key xssh.PublicKey) error {
+		gotSHA := strings.TrimSpace(xssh.FingerprintSHA256(key))
+		if strings.EqualFold(gotSHA, normalizedExpected) {
+			return nil
+		}
+
+		gotMD5 := strings.TrimSpace(xssh.FingerprintLegacyMD5(key))
+		if strings.EqualFold(gotMD5, normalizedExpected) {
+			return nil
+		}
+
+		return fmt.Errorf("ssh host key mismatch host=%s remote=%s expected=%s got_sha256=%s got_md5=%s", hostname, remote.String(), normalizedExpected, gotSHA, gotMD5)
+	}
 }

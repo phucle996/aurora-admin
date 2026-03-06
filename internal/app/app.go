@@ -7,15 +7,17 @@ import (
 	"admin/internal/transport/http/middleware"
 	"admin/pkg/logger"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 	"google.golang.org/grpc"
 )
 
@@ -68,6 +70,14 @@ func NewApplication(cfg *config.Config) (*App, error) {
 		grpcServer,
 		grpcTransport.NewCertTransportService(modules.CertStoreSvc),
 	)
+	grpcTransport.RegisterRuntimeTransportServer(
+		grpcServer,
+		grpcTransport.NewRuntimeTransportService(modules.RuntimeSvc),
+	)
+
+	go modules.TokenSecretSvc.StartAutoRotate(ctx, time.Minute, func(err error) {
+		logger.SysWarn("token.secret.rotate", "auto rotate failed: %v", err)
+	})
 
 	health.MarkReady()
 	return &App{
@@ -89,18 +99,66 @@ func (a *App) Start(cfg *config.Config) error {
 		return err
 	}
 
-	a.Server = &http.Server{
-		Handler: h2c.NewHandler(a.muxHTTPAndGRPC(), &http2.Server{}),
+	a.Server = &http.Server{}
+	handler := a.muxHTTPAndGRPC()
+
+	tlsCfg, tlsErr := buildServerTLSConfig(cfg.App)
+	if tlsErr != nil {
+		_ = ln.Close()
+		return tlsErr
 	}
+	a.Server.Handler = handler
+	a.Server.TLSConfig = tlsCfg
+	if http2Err := http2.ConfigureServer(a.Server, &http2.Server{}); http2Err != nil {
+		_ = ln.Close()
+		return fmt.Errorf("configure http2 tls server failed: %w", http2Err)
+	}
+	ln = tls.NewListener(ln, tlsCfg)
+	logger.SysInfo("http", "starting https+grpc (h2) server at %s", httpAddr)
 
 	a.hc.MarkReady()
-
-	logger.SysInfo("http", "starting http+grpc (h2c) server at %s", httpAddr)
 
 	if err := a.Server.Serve(ln); err != nil && err != http.ErrServerClosed {
 		return err
 	}
 	return nil
+}
+
+func buildServerTLSConfig(cfg config.AppCfg) (*tls.Config, error) {
+	certFile := strings.TrimSpace(cfg.TLSCert)
+	keyFile := strings.TrimSpace(cfg.TLSKey)
+	if certFile == "" || keyFile == "" {
+		return nil, fmt.Errorf("tls requires APP_TLS_CERT_FILE and APP_TLS_KEY_FILE")
+	}
+
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load tls cert/key failed: %w", err)
+	}
+
+	tlsCfg := &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{cert},
+		NextProtos:   []string{"h2", "http/1.1"},
+	}
+
+	caFile := strings.TrimSpace(cfg.TLSCA)
+	if caFile != "" {
+		caPEM, readErr := os.ReadFile(caFile)
+		if readErr != nil {
+			return nil, fmt.Errorf("read tls ca file failed: %w", readErr)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(caPEM) {
+			return nil, fmt.Errorf("invalid tls ca pem")
+		}
+		tlsCfg.ClientCAs = pool
+		tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
+	} else {
+		return nil, fmt.Errorf("tls requires app tls ca file for mTLS")
+	}
+
+	return tlsCfg, nil
 }
 
 func (a *App) Stop() {
@@ -132,6 +190,11 @@ func (a *App) Stop() {
 		if a.Modules.Etcd != nil {
 			if err := a.Modules.Etcd.Close(); err != nil {
 				logger.SysError("shutdown.etcd", err, "etcd shutdown failed")
+			}
+		}
+		if a.Modules.Redis != nil {
+			if err := a.Modules.Redis.Close(); err != nil {
+				logger.SysError("shutdown.redis", err, "redis shutdown failed")
 			}
 		}
 	}

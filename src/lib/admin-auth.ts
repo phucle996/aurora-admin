@@ -2,6 +2,8 @@ import axios from "axios";
 
 export const ADMIN_SESSION_STORAGE = "admin-ui:session-authenticated";
 const ENABLED_MODULES_CACHE_KEY = "admin-ui:enabled-modules-cache:v1";
+let globalUnauthorizedInterceptorAttached = false;
+let redirectingToLogin = false;
 
 type LoginResponsePayload = {
   data?: {
@@ -77,4 +79,57 @@ export function getAdminAuthErrorMessage(error: unknown): string {
     return error.message || "Đăng nhập thất bại";
   }
   return "Đăng nhập thất bại";
+}
+
+function shouldRedirectForUnauthorized(error: unknown): boolean {
+  if (!axios.isAxiosError(error)) {
+    return false;
+  }
+
+  const status = error.response?.status;
+  if (status !== 401 && status !== 403) {
+    return false;
+  }
+
+  const requestURL = (error.config?.url ?? "").toString();
+  if (requestURL.includes("/api/v1/apikey/login")) {
+    return false;
+  }
+
+  return true;
+}
+
+export function handleUnauthorizedError(error: unknown): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  if (!shouldRedirectForUnauthorized(error)) {
+    return;
+  }
+
+  setAdminSession(false);
+
+  if (window.location.pathname === "/login") {
+    return;
+  }
+  if (redirectingToLogin) {
+    return;
+  }
+  redirectingToLogin = true;
+  window.location.replace("/login");
+}
+
+export function setupGlobalUnauthorizedInterceptor(): void {
+  if (globalUnauthorizedInterceptorAttached) {
+    return;
+  }
+  globalUnauthorizedInterceptorAttached = true;
+
+  axios.interceptors.response.use(
+    (response) => response,
+    (error) => {
+      handleUnauthorizedError(error);
+      return Promise.reject(error);
+    },
+  );
 }

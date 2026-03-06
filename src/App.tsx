@@ -20,6 +20,8 @@ const DockerPage = lazy(() => import("@/pages/ContainerPage/DockerPage"));
 const K8sPage = lazy(() => import("@/pages/K8sPage/K8sPage"));
 const ModulePage = lazy(() => import("@/pages/ModulePage/ModulePage"));
 const AdminSettingsPage = lazy(() => import("@/pages/SettingsPage/AdminSettingsPage"));
+const AdminGuidePage = lazy(() => import("@/pages/GuidePage/AdminGuidePage"));
+const AdminChangelogPage = lazy(() => import("@/pages/ChangelogPage/AdminChangelogPage"));
 const NotFoundPage = lazy(() => import("@/pages/NotFoundPage/NotFoundPage"));
 
 function RequireAdminSession() {
@@ -103,6 +105,8 @@ function App() {
                 }
               />
               <Route path="/module" element={<ModulePage />} />
+              <Route path="/guide" element={<AdminGuidePage />} />
+              <Route path="/changelog" element={<AdminChangelogPage />} />
               <Route path="/settings" element={<AdminSettingsPage />} />
               <Route
                 path="/vms"

@@ -1,27 +1,31 @@
-FROM golang:1.26-alpine
+FROM golang:1.26.1-alpine
 
 WORKDIR /app
+ENV PATH="/usr/local/go/bin:/go/bin:${PATH}"
 
-# Install build tools and air for live reload
-RUN apk add --no-cache git build-base && \
-    go install github.com/air-verse/air@latest
+# Dev/runtime tools:
+# - bash: local install/health scripts use "bash -lc"
+# - postgresql-client: module installer runs psql migrations
+# - curl: healthcheck/ops tooling
+RUN apk add --no-cache \
+  bash \
+  build-base \
+  ca-certificates \
+  curl \
+  git \
+  openssl \
+  postgresql-client \
+  tzdata
 
-# Create non-root user
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+RUN go install github.com/air-verse/air@latest
 
-# Pre-download dependencies
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy project files
+# Keep source in image so container can run even without bind mount.
+# In compose dev, source will be overridden by volume.
 COPY . .
 
-# Change ownership to non-root user
-RUN chown -R appuser:appgroup /app
-
-# Switch to non-root user
-USER appuser
-
-EXPOSE 3000
+EXPOSE 3009
 
 CMD ["air", "-c", ".air.toml"]

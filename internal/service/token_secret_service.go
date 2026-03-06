@@ -2,6 +2,8 @@ package service
 
 import (
 	"admin/internal/config"
+	keycfg "admin/internal/key"
+	"admin/internal/repository"
 	"admin/pkg/errorvar"
 	time_util "admin/pkg/logger/time"
 	"context"
@@ -18,10 +20,8 @@ import (
 )
 
 const (
-	defaultTokenSecretPrefix              = "/aurora/token-secret"
-	defaultAccessTokenRotateInterval      = 72 * time.Hour
-	defaultRefreshTokenRotateInterval     = 7 * 24 * time.Hour
-	defaultDeviceTokenRotateInterval      = 14 * 24 * time.Hour
+	defaultTokenSecretPrefix = keycfg.TokenSecretLegacyPrefix
+
 	defaultTokenSecretRotateCheckInterval = time.Hour
 )
 
@@ -50,6 +50,7 @@ type TokenSecretPair struct {
 
 type TokenSecretService struct {
 	etcd                  *clientv3.Client
+	cacheRepo             repository.TokenSecretCacheRepository
 	prefix                string
 	accessRotateInterval  time.Duration
 	refreshRotateInterval time.Duration
@@ -62,27 +63,25 @@ type tokenSecretRecord struct {
 	RotatedAt     string `json:"rotated_at"`
 }
 
-func NewTokenSecretService(etcd *clientv3.Client, cfg config.TokenSecretCfg) *TokenSecretService {
+func NewTokenSecretService(
+	etcd *clientv3.Client,
+	cfg config.TokenSecretCfg,
+	cacheRepo repository.TokenSecretCacheRepository,
+) *TokenSecretService {
 	prefix := strings.TrimSpace(cfg.Prefix)
 	if prefix == "" {
 		prefix = defaultTokenSecretPrefix
 	}
 
 	accessInterval := cfg.AccessRotateInterval
-	if accessInterval <= 0 {
-		accessInterval = defaultAccessTokenRotateInterval
-	}
+
 	refreshInterval := cfg.RefreshRotateInterval
-	if refreshInterval <= 0 {
-		refreshInterval = defaultRefreshTokenRotateInterval
-	}
+
 	deviceInterval := cfg.DeviceRotateInterval
-	if deviceInterval <= 0 {
-		deviceInterval = defaultDeviceTokenRotateInterval
-	}
 
 	return &TokenSecretService{
 		etcd:                  etcd,
+		cacheRepo:             cacheRepo,
 		prefix:                prefix,
 		accessRotateInterval:  accessInterval,
 		refreshRotateInterval: refreshInterval,
@@ -111,6 +110,9 @@ func (s *TokenSecretService) Bootstrap(ctx context.Context) error {
 		if err := s.ensureInitialized(ctx, kind); err != nil {
 			return err
 		}
+		if err := s.syncKindToCache(ctx, kind); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -121,6 +123,9 @@ func (s *TokenSecretService) RotateDueSecrets(ctx context.Context) error {
 	}
 	for _, kind := range s.supportedKinds() {
 		if err := s.rotateIfDue(ctx, kind); err != nil {
+			return err
+		}
+		if err := s.syncKindToCache(ctx, kind); err != nil {
 			return err
 		}
 	}
@@ -175,6 +180,9 @@ func (s *TokenSecretService) GetSecretPair(
 		return nil, err
 	}
 	if err := s.rotateIfDue(ctx, kind); err != nil {
+		return nil, err
+	}
+	if err := s.syncKindToCache(ctx, kind); err != nil {
 		return nil, err
 	}
 
@@ -383,6 +391,39 @@ func (s *TokenSecretService) readCurrentVersion(
 	return version, true, nil
 }
 
+func (s *TokenSecretService) syncKindToCache(ctx context.Context, kind TokenSecretKind) error {
+	if s == nil || s.cacheRepo == nil {
+		return nil
+	}
+
+	currentVersion, exists, err := s.readCurrentVersion(ctx, kind)
+	if err != nil {
+		return err
+	}
+	if !exists || currentVersion <= 0 {
+		return fmt.Errorf("missing current version for kind=%s", kind)
+	}
+
+	record, _, err := s.readVersionRecord(ctx, kind, currentVersion)
+	if err != nil {
+		return err
+	}
+
+	if err := s.cacheRepo.Upsert(ctx, repository.TokenSecretCacheRecord{
+		Kind:          string(kind),
+		Version:       currentVersion,
+		Secret:        record.Secret,
+		RotatedAtUnix: record.RotatedAtUnix,
+	}); err != nil {
+		return err
+	}
+
+	if err := s.cacheRepo.PublishInvalidate(ctx, string(kind), currentVersion); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *TokenSecretService) readVersionRecord(
 	ctx context.Context,
 	kind TokenSecretKind,
@@ -409,11 +450,11 @@ func (s *TokenSecretService) readVersionRecord(
 }
 
 func (s *TokenSecretService) currentVersionKey(kind TokenSecretKind) string {
-	return fmt.Sprintf("%s/%s/current_version", s.prefix, kind)
+	return keycfg.TokenSecretCurrentVersionKey(s.prefix, string(kind))
 }
 
 func (s *TokenSecretService) versionKey(kind TokenSecretKind, version int64) string {
-	return fmt.Sprintf("%s/%s/v/%d", s.prefix, kind, version)
+	return keycfg.TokenSecretVersionKey(s.prefix, string(kind), version)
 }
 
 func (s *TokenSecretService) rotateIntervalFor(kind TokenSecretKind) time.Duration {
@@ -425,7 +466,7 @@ func (s *TokenSecretService) rotateIntervalFor(kind TokenSecretKind) time.Durati
 	case TokenSecretDevice:
 		return s.deviceRotateInterval
 	default:
-		return defaultAccessTokenRotateInterval
+		return s.accessRotateInterval
 	}
 }
 
