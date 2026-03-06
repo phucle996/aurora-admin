@@ -371,6 +371,25 @@ EOF
   as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$ca_key_tmp" "$TLS_CA_KEY_FILE"
 }
 
+preflight_tls_materials() {
+  log "preflight tls materials"
+  for path in "$TLS_CERT_FILE" "$TLS_KEY_FILE" "$TLS_CA_FILE" "$TLS_CA_KEY_FILE"; do
+    as_root test -s "$path" || die "tls preflight failed: missing file $path"
+  done
+
+  local cert_check key_check ca_check verify_check cert_mod key_mod
+  cert_check="$(as_root openssl x509 -in "$TLS_CERT_FILE" -noout 2>&1)" || die "tls preflight failed: invalid cert ${TLS_CERT_FILE}: ${cert_check}"
+  key_check="$(as_root openssl rsa -in "$TLS_KEY_FILE" -check -noout 2>&1)" || die "tls preflight failed: invalid key ${TLS_KEY_FILE}: ${key_check}"
+  ca_check="$(as_root openssl x509 -in "$TLS_CA_FILE" -noout 2>&1)" || die "tls preflight failed: invalid ca ${TLS_CA_FILE}: ${ca_check}"
+
+  verify_check="$(as_root openssl verify -CAfile "$TLS_CA_FILE" "$TLS_CERT_FILE" 2>&1)" || die "tls preflight failed: cert is not signed by ca: ${verify_check}"
+  cert_mod="$(as_root openssl x509 -noout -modulus -in "$TLS_CERT_FILE" | openssl md5 2>/dev/null | awk '{print $NF}')"
+  key_mod="$(as_root openssl rsa -noout -modulus -in "$TLS_KEY_FILE" | openssl md5 2>/dev/null | awk '{print $NF}')"
+  [ -n "$cert_mod" ] || die "tls preflight failed: cannot read cert modulus"
+  [ -n "$key_mod" ] || die "tls preflight failed: cannot read key modulus"
+  [ "$cert_mod" = "$key_mod" ] || die "tls preflight failed: cert/key mismatch"
+}
+
 install_systemd_service() {
   local tag="$1"
   local service_url="https://raw.githubusercontent.com/${REPO}/${tag}/install/aurora-admin.service"
@@ -382,6 +401,10 @@ install_systemd_service() {
   as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$source_service" "$SERVICE_PATH"
   as_root systemctl daemon-reload
   as_root systemctl enable "$SERVICE_NAME"
+}
+
+restart_service() {
+  log "restart ${SERVICE_NAME}"
   as_root systemctl restart "$SERVICE_NAME"
 }
 
@@ -429,7 +452,9 @@ main() {
   install_binary "$tag" "$machine_arch"
   install_env_file "$INPUT_ENV_FILE"
   install_tls_materials "$ENV_FILE"
+  preflight_tls_materials
   install_systemd_service "$tag"
+  restart_service
   delete_source_env_if_needed "$INPUT_ENV_FILE"
 
   log "done"
