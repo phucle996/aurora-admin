@@ -1,6 +1,5 @@
 package telegram
 
-
 import (
 	"admin/internal/config"
 	"admin/pkg/logger"
@@ -27,11 +26,11 @@ func NewClient(cfg *config.TelegramCfg) (*Client, error) {
 	chatID := strings.TrimSpace(cfg.ChatID)
 	if token == "" {
 		logger.SysWarn("telegram.init", "telegram enabled but bot token is empty")
-		return nil, errors.New("telegram bot token is required when TELEGRAM_ENABLE=true")
+		return nil, errors.New("telegram bot token is required")
 	}
 	if chatID == "" {
 		logger.SysWarn("telegram.init", "telegram enabled but chat id is empty")
-		return nil, errors.New("telegram chat id is required when TELEGRAM_ENABLE=true")
+		return nil, errors.New("telegram chat id is required")
 	}
 
 	client := &Client{
