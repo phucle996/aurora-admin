@@ -22,10 +22,8 @@ import (
 )
 
 const (
-	defaultUMSInstallScriptURL      = "https://raw.githubusercontent.com/phucle996/aurora-ums/main/install/install.sh"
-	defaultPlatformInstallScriptURL = "https://raw.githubusercontent.com/phucle996/aurora-platform-resource/main/install/install.sh"
-	randomPortMin                   = 20000
-	randomPortMax                   = 60000
+	randomPortMin = 20000
+	randomPortMax = 60000
 )
 
 func runInstallCommand(
@@ -446,7 +444,16 @@ func isLocalTCPPortAvailable(port int32) bool {
 	return true
 }
 
-func buildDefaultModuleInstallCommand(moduleName, schemaName, appHost, endpoint, databaseURL, adminRPCEndpoint string) string {
+func buildDefaultModuleInstallCommand(
+	moduleName,
+	schemaName,
+	appHost,
+	endpoint,
+	databaseURL,
+	adminRPCEndpoint,
+	umsInstallScriptURL,
+	platformInstallScriptURL string,
+) string {
 	scriptURL := ""
 	args := []string{}
 
@@ -457,9 +464,15 @@ func buildDefaultModuleInstallCommand(moduleName, schemaName, appHost, endpoint,
 
 	switch canonicalModuleName(moduleName) {
 	case "ums":
-		scriptURL = defaultUMSInstallScriptURL
+		scriptURL = strings.TrimSpace(umsInstallScriptURL)
+		if scriptURL == "" {
+			return ""
+		}
 	case "platform":
-		scriptURL = defaultPlatformInstallScriptURL
+		scriptURL = strings.TrimSpace(platformInstallScriptURL)
+		if scriptURL == "" {
+			return ""
+		}
 		if strings.TrimSpace(adminRPCEndpoint) == "" {
 			return ""
 		}

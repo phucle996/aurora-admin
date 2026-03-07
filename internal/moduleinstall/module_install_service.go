@@ -106,6 +106,9 @@ type ModuleInstallService struct {
 	sharedCorsRepo repository.RuntimeConfigRepository
 	corsRPCClient  transportrpc.SharedCORSClient
 	databaseURL    string
+
+	umsInstallScriptURL      string
+	platformInstallScriptURL string
 }
 
 type InstallLogFn func(stage, message string)
@@ -115,13 +118,17 @@ func NewModuleInstallService(
 	runtimeRepo repository.RuntimeConfigRepository,
 	sharedCorsRepo repository.RuntimeConfigRepository,
 	databaseURL string,
+	umsInstallScriptURL string,
+	platformInstallScriptURL string,
 ) *ModuleInstallService {
 	return &ModuleInstallService{
-		endpointRepo:   endpointRepo,
-		runtimeRepo:    runtimeRepo,
-		sharedCorsRepo: sharedCorsRepo,
-		corsRPCClient:  transportrpc.NewSharedCORSClient(),
-		databaseURL:    strings.TrimSpace(databaseURL),
+		endpointRepo:             endpointRepo,
+		runtimeRepo:              runtimeRepo,
+		sharedCorsRepo:           sharedCorsRepo,
+		corsRPCClient:            transportrpc.NewSharedCORSClient(),
+		databaseURL:              strings.TrimSpace(databaseURL),
+		umsInstallScriptURL:      strings.TrimSpace(umsInstallScriptURL),
+		platformInstallScriptURL: strings.TrimSpace(platformInstallScriptURL),
 	}
 }
 
@@ -227,7 +234,16 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 		}
 	}
 
-	command := buildDefaultModuleInstallCommand(moduleName, result.SchemaName, appHost, endpoint, s.databaseURL, adminRPCEndpoint)
+	command := buildDefaultModuleInstallCommand(
+		moduleName,
+		result.SchemaName,
+		appHost,
+		endpoint,
+		s.databaseURL,
+		adminRPCEndpoint,
+		s.umsInstallScriptURL,
+		s.platformInstallScriptURL,
+	)
 	if scope == ModuleInstallScopeRemote && strings.TrimSpace(req.InstallCommand) != "" {
 		command = strings.TrimSpace(req.InstallCommand)
 		logInstall(logFn, "install", "using custom install command for remote target")

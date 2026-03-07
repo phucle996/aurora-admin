@@ -104,17 +104,23 @@ type RedisCfg struct {
 	ClientCert         string // file path
 	InsecureSkipVerify bool
 }
+
+type ModuleInstallCfg struct {
+	UMSInstallScriptURL      string
+	PlatformInstallScriptURL string
+}
 type Config struct {
-	App         AppCfg
-	Etcd        EtcdCfg
-	Database    DatabaseCfg
-	Redis       RedisCfg
-	APIKey      APIKeyCfg
-	Telegram    TelegramCfg
-	TokenSecret TokenSecretCfg
-	TokenTTL    TokenTTLCfg
-	CertStore   CertStoreCfg
-	Cors        CorsCfg
+	App           AppCfg
+	Etcd          EtcdCfg
+	Database      DatabaseCfg
+	Redis         RedisCfg
+	ModuleInstall ModuleInstallCfg
+	APIKey        APIKeyCfg
+	Telegram      TelegramCfg
+	TokenSecret   TokenSecretCfg
+	TokenTTL      TokenTTLCfg
+	CertStore     CertStoreCfg
+	Cors          CorsCfg
 }
 
 func LoadConfig() *Config {
@@ -167,6 +173,10 @@ func LoadConfig() *Config {
 			ClientKey:          getEnv("REDIS_TLS_KEY", ""),
 			ClientCert:         getEnv("REDIS_TLS_CERT", ""),
 			InsecureSkipVerify: getEnvAsBool("REDIS_TLS_INSECURE", false),
+		},
+		ModuleInstall: ModuleInstallCfg{
+			UMSInstallScriptURL:      "https://raw.githubusercontent.com/phucle996/aurora-ums/main/install/install.sh",
+			PlatformInstallScriptURL: "https://raw.githubusercontent.com/phucle996/aurora-platform-resource/main/install/install.sh",
 		},
 		APIKey: APIKeyCfg{
 			Prefix:         keycfg.APIKeyPrefix,
