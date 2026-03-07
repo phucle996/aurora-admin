@@ -180,6 +180,8 @@ const (
 	RTSecretCachePrefix  = "/runtime/token_secret/cache_prefix"
 	RTSecretCacheChannel = "/runtime/token_secret/cache_channel"
 	RTSecretPollEvery    = "/runtime/token_secret/poll_interval"
+
+	RTPlatformKubeconfigCipherKey = "/runtime/platform/kubeconfig_cipher_key"
 )
 
 const (

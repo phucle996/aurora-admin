@@ -93,6 +93,11 @@ var moduleMigrationSources = map[string]moduleMigrationSource{
 			"https://codeload.github.com/phucle996/aurora-mail-service/zip/refs/heads/main",
 		},
 	},
+	"platform": {
+		DownloadURLs: []string{
+			"https://codeload.github.com/phucle996/aurora-platform-resource/zip/refs/heads/main",
+		},
+	},
 }
 
 type ModuleInstallService struct {
@@ -214,7 +219,15 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 		logInstall(logFn, "migration", "schema prepared key=%s schema=%s", result.SchemaKey, rollbackSchemaName)
 	}
 
-	command := buildDefaultModuleInstallCommand(moduleName, result.SchemaName, appHost, endpoint, s.databaseURL)
+	adminRPCEndpoint := ""
+	if moduleName == "platform" {
+		adminRPCEndpoint, err = s.resolveAdminBootstrapEndpoint(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	command := buildDefaultModuleInstallCommand(moduleName, result.SchemaName, appHost, endpoint, s.databaseURL, adminRPCEndpoint)
 	if scope == ModuleInstallScopeRemote && strings.TrimSpace(req.InstallCommand) != "" {
 		command = strings.TrimSpace(req.InstallCommand)
 		logInstall(logFn, "install", "using custom install command for remote target")

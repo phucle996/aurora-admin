@@ -18,6 +18,7 @@ const KvmDetailPage = lazy(() => import("@/pages/HypervisorPage/KvmDetailPage/Kv
 const NewKvmPage = lazy(() => import("@/pages/HypervisorPage/NewKvmPage/NewKvmPage"));
 const DockerPage = lazy(() => import("@/pages/ContainerPage/DockerPage"));
 const K8sPage = lazy(() => import("@/pages/K8sPage/K8sPage"));
+const K8sDetailPage = lazy(() => import("@/pages/K8sPage/K8sDetailPage"));
 const ModulePage = lazy(() => import("@/pages/ModulePage/ModulePage"));
 const AdminSettingsPage = lazy(() => import("@/pages/SettingsPage/AdminSettingsPage"));
 const AdminGuidePage = lazy(() => import("@/pages/GuidePage/AdminGuidePage"));
@@ -99,11 +100,14 @@ function App() {
               <Route
                 path="/orchestration/k8s"
                 element={
-                  <RequireEnabledFeature feature="k8s">
-                    <K8sPage />
+                  <RequireEnabledFeature feature="platform">
+                    <Outlet />
                   </RequireEnabledFeature>
                 }
-              />
+              >
+                <Route index element={<K8sPage />} />
+                <Route path=":clusterId" element={<K8sDetailPage />} />
+              </Route>
               <Route path="/module" element={<ModulePage />} />
               <Route path="/guide" element={<AdminGuidePage />} />
               <Route path="/changelog" element={<AdminChangelogPage />} />

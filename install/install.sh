@@ -18,12 +18,19 @@ TLS_CERT_FILE="${TLS_DIR}/admin.crt"
 TLS_KEY_FILE="${TLS_DIR}/admin.key"
 TLS_CA_FILE="${TLS_DIR}/ca.crt"
 TLS_CA_KEY_FILE="${TLS_DIR}/ca.key"
+TLS_NGINX_CLIENT_CERT_FILE="${TLS_DIR}/nginx-client.crt"
+TLS_NGINX_CLIENT_KEY_FILE="${TLS_DIR}/nginx-client.key"
+NGINX_SERVICE_NAME="${AURORA_ADMIN_NGINX_SERVICE_NAME:-nginx}"
+NGINX_CONF_FILE="${AURORA_ADMIN_NGINX_CONF_FILE:-/etc/nginx/conf.d/aurora-admin.conf}"
+BACKEND_PORT_MIN="${AURORA_ADMIN_BACKEND_PORT_MIN:-20000}"
+BACKEND_PORT_MAX="${AURORA_ADMIN_BACKEND_PORT_MAX:-60000}"
 
 CONFIG_OUTPUT="${AURORA_ADMIN_CONFIG_OUTPUT:-./aurora-admin.env.sample}"
 INPUT_ENV_FILE=""
 MODE="install"
 TMP_DIR=""
 DELETE_INPUT_ENV="true"
+BACKEND_PORT=""
 
 log() { printf '[install] %s\n' "$1"; }
 die() { printf '[install][error] %s\n' "$1" >&2; exit 1; }
@@ -237,6 +244,73 @@ ensure_service_user() {
   as_root chmod 700 "$SERVICE_HOME"
 }
 
+ensure_tls_dir() {
+  as_root mkdir -p "$TLS_DIR"
+  as_root chown root:"$SERVICE_GROUP" "$TLS_DIR"
+  as_root chmod 750 "$TLS_DIR"
+}
+
+port_in_use() {
+  local port="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnH | awk '{print $4}' | grep -Eq "[:.]${port}$"
+    return $?
+  fi
+  if command -v netstat >/dev/null 2>&1; then
+    netstat -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]${port}$"
+    return $?
+  fi
+  return 1
+}
+
+random_backend_port() {
+  local min max attempt candidate
+  min="$BACKEND_PORT_MIN"
+  max="$BACKEND_PORT_MAX"
+  [ "$min" -lt "$max" ] || die "invalid backend port range: ${min}-${max}"
+
+  for attempt in $(seq 1 128); do
+    candidate=$(( RANDOM % (max - min + 1) + min ))
+    if ! port_in_use "$candidate"; then
+      echo "$candidate"
+      return
+    fi
+  done
+
+  die "cannot find free backend port in range ${min}-${max}"
+}
+
+upsert_env_value() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+  local tmp_file="${TMP_DIR}/env-${key}.tmp"
+
+  as_root awk -v k="$key" -v v="$value" '
+    BEGIN { updated=0 }
+    $0 ~ "^" k "=" {
+      print k "=" v
+      updated=1
+      next
+    }
+    { print }
+    END {
+      if (updated == 0) {
+        print k "=" v
+      }
+    }
+  ' "$file" > "$tmp_file"
+  as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$tmp_file" "$file"
+}
+
+assign_random_backend_port() {
+  BACKEND_PORT="$(random_backend_port)"
+  upsert_env_value "$ENV_FILE" "APP_PORT" "$BACKEND_PORT"
+  upsert_env_value "$ENV_FILE" "APP_ENDPOINT_PORT" "443"
+  log "assigned random backend APP_PORT=${BACKEND_PORT}"
+  log "set public endpoint APP_ENDPOINT_PORT=443"
+}
+
 write_config_template() {
   local out="$1"
   cat > "$out" <<'ENV_TPL'
@@ -245,6 +319,7 @@ write_config_template() {
 
 APP_HOSTNAME=aurora-admin.local
 APP_PORT=3009
+APP_ENDPOINT_PORT=443
 APP_LOG_LEVEL=info
 APP_TIMEZONE=Asia/Ho_Chi_Minh
 
@@ -319,7 +394,8 @@ install_env_file() {
 
 install_tls_materials() {
   local env_file="$1"
-  local app_host cert_tmp key_tmp ca_tmp ca_key_tmp csr_tmp ext_tmp
+  local app_host cert_tmp key_tmp ca_tmp ca_key_tmp csr_tmp ext_tmp nginx_key_tmp nginx_csr_tmp nginx_ext_tmp nginx_cert_tmp
+  ensure_tls_dir
   app_host="$(read_env_value "APP_HOSTNAME" "$env_file")"
   [ -n "$app_host" ] || app_host="aurora-admin.local"
 
@@ -329,6 +405,10 @@ install_tls_materials() {
   ca_key_tmp="${TMP_DIR}/ca.key"
   csr_tmp="${TMP_DIR}/admin.csr"
   ext_tmp="${TMP_DIR}/admin.ext"
+  nginx_key_tmp="${TMP_DIR}/nginx-client.key"
+  nginx_csr_tmp="${TMP_DIR}/nginx-client.csr"
+  nginx_ext_tmp="${TMP_DIR}/nginx-client.ext"
+  nginx_cert_tmp="${TMP_DIR}/nginx-client.crt"
 
   log "generate self-signed tls cert/key/ca"
   openssl genrsa -out "$ca_key_tmp" 4096 >/dev/null 2>&1
@@ -362,18 +442,41 @@ EOF
     -sha256 \
     -extfile "$ext_tmp" >/dev/null 2>&1
 
-  as_root mkdir -p "$TLS_DIR"
-  as_root chown root:"$SERVICE_GROUP" "$TLS_DIR"
-  as_root chmod 750 "$TLS_DIR"
+  openssl genrsa -out "$nginx_key_tmp" 2048 >/dev/null 2>&1
+  openssl req -new \
+    -key "$nginx_key_tmp" \
+    -out "$nginx_csr_tmp" \
+    -subj "/CN=aurora-nginx" >/dev/null 2>&1
+
+  cat > "$nginx_ext_tmp" <<EOF
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = clientAuth
+subjectAltName = DNS:aurora-nginx,DNS:localhost,IP:127.0.0.1
+EOF
+
+  openssl x509 -req \
+    -in "$nginx_csr_tmp" \
+    -CA "$ca_tmp" \
+    -CAkey "$ca_key_tmp" \
+    -CAcreateserial \
+    -out "$nginx_cert_tmp" \
+    -days 825 \
+    -sha256 \
+    -extfile "$nginx_ext_tmp" >/dev/null 2>&1
+
   as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$cert_tmp" "$TLS_CERT_FILE"
   as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$key_tmp" "$TLS_KEY_FILE"
   as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$ca_tmp" "$TLS_CA_FILE"
   as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$ca_key_tmp" "$TLS_CA_KEY_FILE"
+  as_root install -m 0444 -o root -g root "$nginx_cert_tmp" "$TLS_NGINX_CLIENT_CERT_FILE"
+  as_root install -m 0400 -o root -g root "$nginx_key_tmp" "$TLS_NGINX_CLIENT_KEY_FILE"
 }
 
 preflight_tls_materials() {
   log "preflight tls materials"
-  for path in "$TLS_CERT_FILE" "$TLS_KEY_FILE" "$TLS_CA_FILE" "$TLS_CA_KEY_FILE"; do
+  as_root test -d "$TLS_DIR" || die "tls preflight failed: missing dir $TLS_DIR"
+  for path in "$TLS_CERT_FILE" "$TLS_KEY_FILE" "$TLS_CA_FILE" "$TLS_CA_KEY_FILE" "$TLS_NGINX_CLIENT_CERT_FILE" "$TLS_NGINX_CLIENT_KEY_FILE"; do
     as_root test -s "$path" || die "tls preflight failed: missing file $path"
   done
 
@@ -388,6 +491,94 @@ preflight_tls_materials() {
   [ -n "$cert_mod" ] || die "tls preflight failed: cannot read cert modulus"
   [ -n "$key_mod" ] || die "tls preflight failed: cannot read key modulus"
   [ "$cert_mod" = "$key_mod" ] || die "tls preflight failed: cert/key mismatch"
+}
+
+ensure_nginx_installed() {
+  if command -v nginx >/dev/null 2>&1; then
+    return
+  fi
+
+  log "install nginx"
+  if command -v apt-get >/dev/null 2>&1; then
+    as_root apt-get update -y
+    as_root apt-get install -y nginx
+    return
+  fi
+  if command -v dnf >/dev/null 2>&1; then
+    as_root dnf install -y nginx
+    return
+  fi
+  if command -v yum >/dev/null 2>&1; then
+    as_root yum install -y nginx
+    return
+  fi
+  if command -v apk >/dev/null 2>&1; then
+    as_root apk add --no-cache nginx
+    return
+  fi
+
+  die "cannot install nginx automatically (unsupported package manager)"
+}
+
+install_nginx_reverse_proxy() {
+  local app_host proxy_server_name backend_port conf_tmp
+  ensure_nginx_installed
+
+  app_host="$(read_env_value "APP_HOSTNAME" "$ENV_FILE")"
+  [ -n "$app_host" ] || app_host="aurora-admin.local"
+  proxy_server_name="$app_host"
+
+  backend_port="$BACKEND_PORT"
+  if [ -z "$backend_port" ]; then
+    backend_port="$(read_env_value "APP_PORT" "$ENV_FILE")"
+  fi
+  [ -n "$backend_port" ] || die "cannot resolve backend APP_PORT for nginx"
+
+  conf_tmp="${TMP_DIR}/aurora-admin-nginx.conf"
+  cat > "$conf_tmp" <<EOF
+server {
+  listen 80;
+  listen [::]:80;
+  server_name ${proxy_server_name};
+  return 301 https://\$host\$request_uri;
+}
+
+server {
+  listen 443 ssl http2;
+  listen [::]:443 ssl http2;
+  server_name ${proxy_server_name};
+
+  ssl_certificate ${TLS_CERT_FILE};
+  ssl_certificate_key ${TLS_KEY_FILE};
+  ssl_session_timeout 10m;
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_ciphers HIGH:!aNULL:!MD5;
+  ssl_prefer_server_ciphers off;
+
+  location / {
+    proxy_pass https://127.0.0.1:${backend_port};
+    proxy_http_version 1.1;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+
+    proxy_ssl_server_name on;
+    proxy_ssl_name ${proxy_server_name};
+    proxy_ssl_verify on;
+    proxy_ssl_trusted_certificate ${TLS_CA_FILE};
+    proxy_ssl_certificate ${TLS_NGINX_CLIENT_CERT_FILE};
+    proxy_ssl_certificate_key ${TLS_NGINX_CLIENT_KEY_FILE};
+  }
+}
+EOF
+
+  as_root install -m 0644 -o root -g root "$conf_tmp" "$NGINX_CONF_FILE"
+  as_root nginx -t
+  as_root systemctl daemon-reload
+  as_root systemctl enable "$NGINX_SERVICE_NAME"
+  as_root systemctl restart "$NGINX_SERVICE_NAME"
+  log "nginx reverse proxy ready: https://${proxy_server_name} -> 127.0.0.1:${backend_port}"
 }
 
 install_systemd_service() {
@@ -449,17 +640,23 @@ main() {
   [ -n "$tag" ] || die "cannot resolve release tag"
 
   ensure_service_user
+  ensure_tls_dir
   install_binary "$tag" "$machine_arch"
   install_env_file "$INPUT_ENV_FILE"
+  assign_random_backend_port
   install_tls_materials "$ENV_FILE"
   preflight_tls_materials
   install_systemd_service "$tag"
+  install_nginx_reverse_proxy
   restart_service
   delete_source_env_if_needed "$INPUT_ENV_FILE"
 
   log "done"
   log "binary: ${BIN_PATH}"
   log "service: ${SERVICE_NAME}"
+  log "nginx: ${NGINX_SERVICE_NAME}"
+  log "nginx config: ${NGINX_CONF_FILE}"
+  log "backend app_port: ${BACKEND_PORT}"
   log "env: ${ENV_FILE}"
   log "ui: embedded in binary"
   log "release: ${REPO}@${tag}"

@@ -36,7 +36,7 @@ const navItems: Array<{
   { id: "module", label: "Runtime Modules", to: "/module", icon: Layers },
   { id: "kvm", label: "KVM Hypervisor", to: "/hypervisor/kvm", icon: Server, feature: "kvm" },
   { id: "docker", label: "Docker Runtime", to: "/containers/docker", icon: Box, feature: "docker" },
-  { id: "k8s", label: "Kubernetes", to: "/orchestration/k8s", icon: Network, feature: "k8s" },
+  { id: "k8s", label: "Kubernetes", to: "/orchestration/k8s", icon: Network, feature: "platform" },
   { id: "settings", label: "Settings", to: "/settings", icon: Settings },
 ];
 
@@ -94,7 +94,7 @@ export default function AdminSidebar({
       return true;
     }
     if (status !== "ready") {
-      return true;
+      return false;
     }
     return isFeatureEnabled(item.feature);
   });

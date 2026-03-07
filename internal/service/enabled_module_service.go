@@ -32,6 +32,7 @@ var runtimeModuleDefinitions = []moduleDefinition{
 	{Name: "mail", Aliases: []string{"mail", "smtp"}},
 	{Name: "gateway", Aliases: []string{"gateway", "nginx", "proxy"}},
 	{Name: "monitoring", Aliases: []string{"monitoring", "monitor", "metrics", "victoria", "prometheus"}},
+	{Name: "platform", Aliases: []string{"platform", "platform-resource"}},
 }
 
 func NewEnabledModuleService(repo repository.EndpointRepository) *EnabledModuleService {

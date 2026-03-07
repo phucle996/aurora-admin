@@ -22,9 +22,10 @@ import (
 )
 
 const (
-	defaultUMSInstallScriptURL = "https://raw.githubusercontent.com/phucle996/aurora-ums/main/install/install.sh"
-	randomPortMin              = 20000
-	randomPortMax              = 60000
+	defaultUMSInstallScriptURL      = "https://raw.githubusercontent.com/phucle996/aurora-ums/main/install/install.sh"
+	defaultPlatformInstallScriptURL = "https://raw.githubusercontent.com/phucle996/aurora-platform-resource/main/install/install.sh"
+	randomPortMin                   = 20000
+	randomPortMax                   = 60000
 )
 
 func runInstallCommand(
@@ -346,7 +347,13 @@ func normalizeModuleName(raw string) string {
 }
 
 func canonicalModuleName(raw string) string {
-	return normalizeModuleName(raw)
+	name := normalizeModuleName(raw)
+	switch name {
+	case "platform", "platform-resource", "platform_resource", "plaform-resource", "plaform_resource":
+		return "platform"
+	default:
+		return name
+	}
 }
 
 func resolveInstallEndpoint(scope string, appHost string, appPort int32, fallbackEndpoint string) (string, int32, error) {
@@ -439,17 +446,27 @@ func isLocalTCPPortAvailable(port int32) bool {
 	return true
 }
 
-func buildDefaultModuleInstallCommand(moduleName, schemaName, appHost, endpoint, databaseURL string) string {
-	if moduleName != "ums" {
-		return ""
-	}
+func buildDefaultModuleInstallCommand(moduleName, schemaName, appHost, endpoint, databaseURL, adminRPCEndpoint string) string {
+	scriptURL := ""
+	args := []string{}
 
 	_ = schemaName
 	_ = appHost
 	_ = endpoint
 	_ = databaseURL
 
-	args := []string{}
+	switch canonicalModuleName(moduleName) {
+	case "ums":
+		scriptURL = defaultUMSInstallScriptURL
+	case "platform":
+		scriptURL = defaultPlatformInstallScriptURL
+		if strings.TrimSpace(adminRPCEndpoint) == "" {
+			return ""
+		}
+		args = append(args, "--admin-rpc-endpoint", strings.TrimSpace(adminRPCEndpoint))
+	default:
+		return ""
+	}
 
 	escapedArgs := make([]string, 0, len(args))
 	for _, arg := range args {
@@ -458,7 +475,7 @@ func buildDefaultModuleInstallCommand(moduleName, schemaName, appHost, endpoint,
 
 	installScript := strings.Join([]string{
 		"set -e",
-		"script_url=" + shellEscape(defaultUMSInstallScriptURL),
+		"script_url=" + shellEscape(scriptURL),
 		"tmp_script=\"$(mktemp)\"",
 		"cleanup(){ rm -f \"$tmp_script\"; }",
 		"trap cleanup EXIT",
@@ -558,6 +575,7 @@ func buildHealthcheckCandidates(endpoint string) []string {
 		if err == nil && strings.TrimSpace(parsed.Host) != "" {
 			parsed.Scheme = "https"
 			httpsBase := strings.TrimRight(parsed.String(), "/")
+			add(httpsBase+"/health/liveness", &candidates)
 			add(httpsBase+"/health/readiness", &candidates)
 			add(httpsBase+"/health", &candidates)
 			add(httpsBase, &candidates)
@@ -566,6 +584,7 @@ func buildHealthcheckCandidates(endpoint string) []string {
 	}
 
 	httpsBase := "https://" + endpoint
+	add(httpsBase+"/health/liveness", &candidates)
 	add(httpsBase+"/health/readiness", &candidates)
 	add(httpsBase+"/health", &candidates)
 	add(httpsBase, &candidates)
@@ -573,6 +592,7 @@ func buildHealthcheckCandidates(endpoint string) []string {
 	port := endpointPort(endpoint)
 	if port != "" {
 		localHTTPS := "https://127.0.0.1:" + port
+		add(localHTTPS+"/health/liveness", &candidates)
 		add(localHTTPS+"/health/readiness", &candidates)
 		add(localHTTPS+"/health", &candidates)
 		add(localHTTPS, &candidates)

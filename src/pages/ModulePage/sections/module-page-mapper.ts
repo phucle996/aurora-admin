@@ -12,6 +12,7 @@ export const DEFAULT_MODULE_PORT: Record<string, number> = {
   mail: 8080,
   gateway: 443,
   monitoring: 8428,
+  platform: 8080,
 };
 
 const moduleCatalog: ModuleCatalogItem[] = [
@@ -63,6 +64,13 @@ const moduleCatalog: ModuleCatalogItem[] = [
     description: "Thu thap va luu tru metrics/telemetry toan cum.",
     icon: Layers,
     aliases: ["monitor", "metrics", "victoria", "prometheus"],
+  },
+  {
+    id: "platform",
+    label: "Platform Resource",
+    description: "Quan ly cluster Kubernetes, placement va workload orchestration.",
+    icon: Layers,
+    aliases: ["platform", "platform-resource"],
   },
 ];
 

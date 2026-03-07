@@ -13,14 +13,15 @@ import (
 )
 
 type AppCfg struct {
-	Name     string
-	HostName string
-	Port     int
-	LogLV    string
-	TimeZone string
-	TLSCert  string
-	TLSKey   string
-	TLSCA    string
+	Name         string
+	HostName     string
+	Port         int
+	EndpointPort int
+	LogLV        string
+	TimeZone     string
+	TLSCert      string
+	TLSKey       string
+	TLSCA        string
 }
 
 type EtcdCfg struct {
@@ -123,14 +124,15 @@ func LoadConfig() *Config {
 
 	return &Config{
 		App: AppCfg{
-			Name:     "Aurora Admin",
-			HostName: getEnv("APP_HOSTNAME", "aurora-admin"),
-			Port:     getEnvAsInt("APP_PORT", 3009),
-			LogLV:    getEnv("APP_LOG_LEVEL", "info"),
-			TimeZone: getEnv("APP_TIMEZONE", "Asia/Ho_Chi_Minh"),
-			TLSCert:  "/etc/aurora/certs/admin.crt",
-			TLSKey:   "/etc/aurora/certs/admin.key",
-			TLSCA:    "/etc/aurora/certs/ca.crt",
+			Name:         "Aurora Admin",
+			HostName:     getEnv("APP_HOSTNAME", "aurora-admin"),
+			Port:         getEnvAsInt("APP_PORT", 3009),
+			EndpointPort: getEnvAsInt("APP_ENDPOINT_PORT", getEnvAsInt("APP_PORT", 3009)),
+			LogLV:        getEnv("APP_LOG_LEVEL", "info"),
+			TimeZone:     getEnv("APP_TIMEZONE", "Asia/Ho_Chi_Minh"),
+			TLSCert:      "/etc/aurora/certs/admin.crt",
+			TLSKey:       "/etc/aurora/certs/admin.key",
+			TLSCA:        "/etc/aurora/certs/ca.crt",
 		},
 		Etcd: EtcdCfg{
 			Endpoints:            getEnvAsSlice("ETCD_ENDPOINTS", []string{"localhost:2379"}),

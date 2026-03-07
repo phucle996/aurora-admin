@@ -14,7 +14,7 @@ import { hasAdminSession, resolveAdminBaseURL } from "@/lib/admin-auth";
 const ENABLED_MODULES_CACHE_KEY = "admin-ui:enabled-modules-cache:v1";
 const ENABLED_MODULES_CACHE_TTL_MS = 30 * 60 * 1000;
 
-export type ModuleFeature = "kvm" | "docker" | "k8s";
+export type ModuleFeature = "kvm" | "docker" | "k8s" | "platform";
 
 export type EnabledModuleItem = {
   name: string;
@@ -132,6 +132,9 @@ function buildFeatures(items: EnabledModuleItem[]): ModuleFeature[] {
     }
     if (text.includes("k8s") || text.includes("kubernetes")) {
       matched.add("k8s");
+    }
+    if (text.includes("platform-resource") || text.includes("platform")) {
+      matched.add("platform");
     }
   }
 

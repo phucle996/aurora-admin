@@ -63,7 +63,7 @@ func (s *RuntimeBootstrapService) BuildRuntimeValues(
 
 	schemaStoreKey := keycfg.RuntimeSchemaKey(moduleName)
 
-	runtimeSpecs := buildRuntimeBootstrapSpecs(schemaStoreKey)
+	runtimeSpecs := buildRuntimeBootstrapSpecs(moduleName, schemaStoreKey)
 	sharedCORSSpecs := buildSharedCORSBootstrapSpecs()
 
 	runtimeLoaded, err := s.loadBySpecs(ctx, s.runtimeRepo, runtimeSpecs, bootstrapSourceRuntime)
@@ -101,8 +101,8 @@ func (s *RuntimeBootstrapService) BuildRuntimeValues(
 	return values, nil
 }
 
-func buildRuntimeBootstrapSpecs(schemaStoreKey string) []bootstrapValueSpec {
-	return []bootstrapValueSpec{
+func buildRuntimeBootstrapSpecs(moduleName string, schemaStoreKey string) []bootstrapValueSpec {
+	specs := []bootstrapValueSpec{
 		{Source: bootstrapSourceRuntime, StoreKey: keycfg.RTAppTZ, OutputKey: "app/timezone", NonEmpty: true},
 		{Source: bootstrapSourceRuntime, StoreKey: keycfg.RTAppLogLevel, OutputKey: "app/log_level", NonEmpty: true},
 		{Source: bootstrapSourceRuntime, StoreKey: keycfg.RTPgURL, OutputKey: "postgresql/url", NonEmpty: true},
@@ -125,6 +125,15 @@ func buildRuntimeBootstrapSpecs(schemaStoreKey string) []bootstrapValueSpec {
 		{Source: bootstrapSourceRuntime, StoreKey: keycfg.RTSecretCacheChannel, OutputKey: "token_secret/cache_channel", NonEmpty: true},
 		{Source: bootstrapSourceRuntime, StoreKey: keycfg.RTSecretPollEvery, OutputKey: "token_secret/poll_interval", NonEmpty: true},
 	}
+	if isPlatformModuleName(moduleName) {
+		specs = append(specs, bootstrapValueSpec{
+			Source:    bootstrapSourceRuntime,
+			StoreKey:  keycfg.RTPlatformKubeconfigCipherKey,
+			OutputKey: "platform/kubeconfig_cipher_key",
+			NonEmpty:  true,
+		})
+	}
+	return specs
 }
 
 func buildSharedCORSBootstrapSpecs() []bootstrapValueSpec {
@@ -225,7 +234,17 @@ func buildBootstrapValidationError(missing []string, empty []string) error {
 }
 
 func normalizeBootstrapModuleName(raw string) string {
-	return strings.ToLower(strings.Trim(strings.TrimSpace(raw), "/"))
+	name := strings.ToLower(strings.Trim(strings.TrimSpace(raw), "/"))
+	switch name {
+	case "platform", "platform-resource", "platform_resource", "plaform-resource", "plaform_resource":
+		return "platform"
+	default:
+		return name
+	}
+}
+
+func isPlatformModuleName(name string) bool {
+	return normalizeBootstrapModuleName(name) == "platform"
 }
 
 func (s *RuntimeBootstrapService) resolveModulePort(
