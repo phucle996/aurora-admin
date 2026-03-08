@@ -25,6 +25,7 @@ TLS_NGINX_CLIENT_KEY_FILE="${TLS_DIR}/nginx-client.key"
 NGINX_SERVICE_NAME="${AURORA_ADMIN_NGINX_SERVICE_NAME:-nginx}"
 NGINX_CONF_FILE="${AURORA_ADMIN_NGINX_CONF_FILE:-/etc/nginx/conf.d/aurora-admin.conf}"
 NGINX_TEMPLATE_FILE="${AURORA_ADMIN_NGINX_TEMPLATE_FILE:-${SCRIPT_DIR}/nginx.conf}"
+NGINX_CACHE_DIR="${AURORA_ADMIN_NGINX_CACHE_DIR:-/var/cache/nginx/aurora-admin}"
 BACKEND_PORT_MIN="${AURORA_ADMIN_BACKEND_PORT_MIN:-20000}"
 BACKEND_PORT_MAX="${AURORA_ADMIN_BACKEND_PORT_MAX:-60000}"
 
@@ -525,9 +526,61 @@ ensure_nginx_installed() {
   die "cannot install nginx automatically (unsupported package manager)"
 }
 
+ensure_nginx_cache_dir() {
+  local nginx_user
+  nginx_user="$(as_root awk '/^[[:space:]]*user[[:space:]]+/ {gsub(/;/,"",$2); print $2; exit}' /etc/nginx/nginx.conf 2>/dev/null || true)"
+  if [ -z "$nginx_user" ]; then
+    nginx_user="www-data"
+  fi
+
+  as_root mkdir -p "$NGINX_CACHE_DIR"
+  as_root chown -R "${nginx_user}:${nginx_user}" "$NGINX_CACHE_DIR" || as_root chown -R "${nginx_user}" "$NGINX_CACHE_DIR"
+  as_root chmod 750 "$NGINX_CACHE_DIR" || true
+}
+
+nginx_supports_brotli() {
+  if as_root nginx -V 2>&1 | grep -qi "brotli"; then
+    return 0
+  fi
+  if as_root sh -lc 'ls /etc/nginx/modules-enabled/*brotli*.conf >/dev/null 2>&1'; then
+    return 0
+  fi
+  if as_root sh -lc 'ls /usr/lib/nginx/modules/*brotli*.so >/dev/null 2>&1'; then
+    return 0
+  fi
+  return 1
+}
+
+render_nginx_template() {
+  local src="$1"
+  local dst="$2"
+  local app_host="$3"
+  local backend_port="$4"
+
+  if nginx_supports_brotli; then
+    sed '/^## __BROTLI_BEGIN__$/d; /^## __BROTLI_END__$/d' "$src" > "$dst"
+    log "nginx brotli: enabled"
+  else
+    sed '/^## __BROTLI_BEGIN__$/,/^## __BROTLI_END__$/d' "$src" > "$dst"
+    log "nginx brotli: not available, fallback to gzip"
+  fi
+
+  sed -i \
+    -e "s|__SERVER_NAME__|${app_host}|g" \
+    -e "s|__BACKEND_PORT__|${backend_port}|g" \
+    -e "s|__TLS_CERT_FILE__|${TLS_CERT_FILE}|g" \
+    -e "s|__TLS_KEY_FILE__|${TLS_KEY_FILE}|g" \
+    -e "s|__TLS_CA_FILE__|${TLS_CA_FILE}|g" \
+    -e "s|__TLS_NGINX_CLIENT_CERT_FILE__|${TLS_NGINX_CLIENT_CERT_FILE}|g" \
+    -e "s|__TLS_NGINX_CLIENT_KEY_FILE__|${TLS_NGINX_CLIENT_KEY_FILE}|g" \
+    -e "s|__NGINX_CACHE_DIR__|${NGINX_CACHE_DIR}|g" \
+    "$dst"
+}
+
 install_nginx_reverse_proxy() {
   local app_host proxy_server_name backend_port conf_tmp
   ensure_nginx_installed
+  ensure_nginx_cache_dir
 
   app_host="$(read_env_value "APP_HOSTNAME" "$ENV_FILE")"
   [ -n "$app_host" ] || app_host="aurora-admin.local"
@@ -541,15 +594,7 @@ install_nginx_reverse_proxy() {
   [ -f "$NGINX_TEMPLATE_FILE" ] || die "nginx template file not found: ${NGINX_TEMPLATE_FILE}"
 
   conf_tmp="${TMP_DIR}/aurora-admin-nginx.conf"
-  sed \
-    -e "s|__SERVER_NAME__|${proxy_server_name}|g" \
-    -e "s|__BACKEND_PORT__|${backend_port}|g" \
-    -e "s|__TLS_CERT_FILE__|${TLS_CERT_FILE}|g" \
-    -e "s|__TLS_KEY_FILE__|${TLS_KEY_FILE}|g" \
-    -e "s|__TLS_CA_FILE__|${TLS_CA_FILE}|g" \
-    -e "s|__TLS_NGINX_CLIENT_CERT_FILE__|${TLS_NGINX_CLIENT_CERT_FILE}|g" \
-    -e "s|__TLS_NGINX_CLIENT_KEY_FILE__|${TLS_NGINX_CLIENT_KEY_FILE}|g" \
-    "$NGINX_TEMPLATE_FILE" > "$conf_tmp"
+  render_nginx_template "$NGINX_TEMPLATE_FILE" "$conf_tmp" "$proxy_server_name" "$backend_port"
 
   as_root install -m 0644 -o root -g root "$conf_tmp" "$NGINX_CONF_FILE"
   as_root nginx -t
@@ -558,6 +603,7 @@ install_nginx_reverse_proxy() {
   as_root systemctl restart "$NGINX_SERVICE_NAME"
   log "nginx reverse proxy ready: https://${proxy_server_name} -> 127.0.0.1:${backend_port}"
   log "nginx template: ${NGINX_TEMPLATE_FILE}"
+  log "nginx cache dir: ${NGINX_CACHE_DIR}"
 }
 
 install_systemd_service() {

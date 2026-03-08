@@ -5,6 +5,11 @@ import { cn } from "@/lib/utils";
 import ThemeSwitcher from "@/components/theme-switcher";
 import LanguageSwitcher from "@/components/language-switcher";
 import { authBackgrounds } from "@/pages/AuthPage/auth-layout-theme";
+import {
+  ADMIN_BRAND_LOGO_PATH,
+  ADMIN_BRAND_NAME,
+  ADMIN_BRAND_SHORT_NAME,
+} from "@/lib/admin-brand";
 
 type AuthHeroProps = {
   hero?: ReactNode;
@@ -24,8 +29,8 @@ export function AuthLayout({ hero, className }: AuthHeroProps) {
     <div className="relative z-10 flex flex-col items-start gap-4">
       <div className="flex items-end">
         <img
-          src="/logo.png"
-          alt="Aurora"
+          src={ADMIN_BRAND_LOGO_PATH}
+          alt={ADMIN_BRAND_NAME}
           className="h-25 w-25 object-contain"
         />
         <div>
@@ -35,7 +40,7 @@ export function AuthLayout({ hero, className }: AuthHeroProps) {
               isDark ? "text-white" : "text-slate-900",
             )}
           >
-            uora
+            {ADMIN_BRAND_SHORT_NAME}
           </p>
         </div>
       </div>

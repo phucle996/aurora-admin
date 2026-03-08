@@ -1,4 +1,4 @@
-import { Compass, Home, LogIn } from "lucide-react";
+import { Home, LogIn } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Link } from "react-router-dom";
 
@@ -54,8 +54,8 @@ export default function NotFoundPage() {
               404 <span className={accentText}>Not Found</span>
             </h1>
             <p className={cn("max-w-md text-sm", textMuted)}>
-              Trang bạn đang truy cập không tồn tại hoặc đã được di chuyển. Hãy quay lại
-              đường dẫn hợp lệ để tiếp tục quản trị hệ thống.
+              Trang bạn đang truy cập không tồn tại hoặc đã được di chuyển. Kiểm tra lại URL
+              hoặc quay về dashboard để tiếp tục.
             </p>
             <div className="flex flex-wrap items-center gap-3">
               <Button asChild className="rounded-full bg-indigo-500 px-5 text-white hover:bg-indigo-400">
@@ -80,23 +80,12 @@ export default function NotFoundPage() {
             </div>
           </div>
 
-          <div
-            className={cn(
-              "relative mx-auto flex h-[22rem] w-full max-w-md items-center justify-center rounded-3xl border backdrop-blur-xl md:h-[33rem]",
-              isDark
-                ? "border-white/10 bg-white/5 shadow-[0_20px_50px_rgba(2,6,23,0.45)]"
-                : "border-black/10 bg-white/80 shadow-[0_20px_50px_rgba(30,41,59,0.20)]",
-            )}
-          >
-            <div className="flex flex-col items-center gap-3 text-center">
-              <Compass className={cn("h-12 w-12", accentText)} />
-              <p className={cn("text-base font-medium", textPrimary)}>
-                Endpoint not found
-              </p>
-              <p className={cn("max-w-[16rem] text-xs", textMuted)}>
-                Kiểm tra lại URL hoặc quay lại dashboard để truy cập chức năng hợp lệ.
-              </p>
-            </div>
+          <div className="relative mx-auto h-100 w-100 md:h-[33rem] md:w-[33rem]">
+            <img
+              src={isDark ? "/404Error-dark.svg" : "/404Error-light.svg"}
+              alt="404 Illustration"
+              className="h-full w-full object-contain drop-shadow-[0_20px_50px_rgba(15,23,42,0.25)]"
+            />
           </div>
         </div>
       </div>

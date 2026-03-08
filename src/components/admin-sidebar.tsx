@@ -17,6 +17,11 @@ import { Link, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useEnabledModules, type ModuleFeature } from "@/state/enabled-modules-context";
 import { cn } from "@/lib/utils";
+import {
+  ADMIN_BRAND_LOGO_PATH,
+  ADMIN_BRAND_NAME,
+  ADMIN_BRAND_TAGLINE,
+} from "@/lib/admin-brand";
 
 type AdminSidebarProps = {
   onLogout: () => void;
@@ -110,21 +115,19 @@ export default function AdminSidebar({
       <div className={cn("flex items-center pb-4", collapsed ? "justify-between px-1" : "gap-2 px-2")}>
         <div
           className={cn(
-            "grid h-8 w-8 place-items-center rounded-lg border text-xs font-semibold",
-            isDark
-              ? "border-sky-300/30 bg-sky-500/10 text-sky-100"
-              : "border-sky-200 bg-sky-50 text-sky-700",
+            "grid h-8 w-8 place-items-center overflow-hidden rounded-lg border",
+            isDark ? "border-sky-300/30 bg-sky-500/10" : "border-sky-200 bg-sky-50",
           )}
         >
-          A
+          <img src={ADMIN_BRAND_LOGO_PATH} alt={ADMIN_BRAND_NAME} className="h-full w-full object-cover" />
         </div>
         {!collapsed ? (
           <div className="min-w-0">
             <p className={cn("truncate text-sm font-semibold", isDark ? "text-white" : "text-slate-900")}>
-              Aurora Admin
+              {ADMIN_BRAND_NAME}
             </p>
             <p className={cn("text-[11px]", isDark ? "text-slate-400" : "text-slate-500")}>
-              Enterprise Console
+              {ADMIN_BRAND_TAGLINE}
             </p>
           </div>
         ) : null}

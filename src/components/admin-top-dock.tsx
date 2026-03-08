@@ -7,6 +7,7 @@ import LanguageSwitcher from "@/components/language-switcher";
 import ThemeSwitcher from "@/components/theme-switcher";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ADMIN_BRAND_NAME, ADMIN_BRAND_WELCOME } from "@/lib/admin-brand";
 import { cn } from "@/lib/utils";
 
 type AdminTopDockProps = {
@@ -22,7 +23,7 @@ function resolvePageTitle(pathname: string): string {
   if (pathname.startsWith("/hypervisor/kvm")) return "KVM Hypervisor";
   if (pathname.startsWith("/containers/docker")) return "Docker Runtime";
   if (pathname.startsWith("/orchestration/k8s")) return "Kubernetes";
-  return "Aurora Admin";
+  return ADMIN_BRAND_NAME;
 }
 
 export default function AdminTopDock({ className }: AdminTopDockProps) {
@@ -46,7 +47,7 @@ export default function AdminTopDock({ className }: AdminTopDockProps) {
             {pageTitle}
           </p>
           <p className={cn("text-xs", isDark ? "text-slate-400" : "text-slate-500")}>
-            Welcome to Aurora enterprise control plane
+            {ADMIN_BRAND_WELCOME}
           </p>
         </div>
 
