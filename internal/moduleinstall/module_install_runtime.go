@@ -427,10 +427,12 @@ func buildDefaultModuleInstallCommand(
 	sudoPassword *string,
 ) string {
 	args := []string{}
+	preRunSteps := []string{}
 
 	switch canonicalModuleName(moduleName) {
 	case "ums":
 		args = append(args, "-r", "phucle996/aurora-ums")
+		preRunSteps = append(preRunSteps, `sed -i '/trap .* RETURN/d' "$tmp_script" || true`)
 	case "platform":
 		if strings.TrimSpace(adminRPCEndpoint) == "" {
 			return ""
@@ -494,6 +496,7 @@ func buildDefaultModuleInstallCommand(
 		"  if ! command -v curl >/dev/null 2>&1; then echo 'cannot install curl/wget to fetch install script' && exit 1; fi",
 		"  curl -fsSL \"$script_url\" -o \"$tmp_script\"",
 		"fi",
+		strings.Join(preRunSteps, "\n"),
 		"chmod +x \"$tmp_script\"",
 		"if [ \"$(id -u)\" -eq 0 ]; then",
 		"  " + runScriptCmd,
