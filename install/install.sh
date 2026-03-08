@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 REPO="${AURORA_ADMIN_GITHUB_REPO:-phucle996/aurora-admin}"
 VERSION="${AURORA_ADMIN_VERSION:-latest}"
 APP_NAME="${AURORA_ADMIN_BIN_NAME:-aurora-admin-service}"
@@ -22,6 +24,7 @@ TLS_NGINX_CLIENT_CERT_FILE="${TLS_DIR}/nginx-client.crt"
 TLS_NGINX_CLIENT_KEY_FILE="${TLS_DIR}/nginx-client.key"
 NGINX_SERVICE_NAME="${AURORA_ADMIN_NGINX_SERVICE_NAME:-nginx}"
 NGINX_CONF_FILE="${AURORA_ADMIN_NGINX_CONF_FILE:-/etc/nginx/conf.d/aurora-admin.conf}"
+NGINX_TEMPLATE_FILE="${AURORA_ADMIN_NGINX_TEMPLATE_FILE:-${SCRIPT_DIR}/nginx.conf}"
 BACKEND_PORT_MIN="${AURORA_ADMIN_BACKEND_PORT_MIN:-20000}"
 BACKEND_PORT_MAX="${AURORA_ADMIN_BACKEND_PORT_MAX:-60000}"
 
@@ -535,45 +538,18 @@ install_nginx_reverse_proxy() {
     backend_port="$(read_env_value "APP_PORT" "$ENV_FILE")"
   fi
   [ -n "$backend_port" ] || die "cannot resolve backend APP_PORT for nginx"
+  [ -f "$NGINX_TEMPLATE_FILE" ] || die "nginx template file not found: ${NGINX_TEMPLATE_FILE}"
 
   conf_tmp="${TMP_DIR}/aurora-admin-nginx.conf"
-  cat > "$conf_tmp" <<EOF
-server {
-  listen 80;
-  listen [::]:80;
-  server_name ${proxy_server_name};
-  return 301 https://\$host\$request_uri;
-}
-
-server {
-  listen 443 ssl http2;
-  listen [::]:443 ssl http2;
-  server_name ${proxy_server_name};
-
-  ssl_certificate ${TLS_CERT_FILE};
-  ssl_certificate_key ${TLS_KEY_FILE};
-  ssl_session_timeout 10m;
-  ssl_protocols TLSv1.2 TLSv1.3;
-  ssl_ciphers HIGH:!aNULL:!MD5;
-  ssl_prefer_server_ciphers off;
-
-  location / {
-    proxy_pass https://127.0.0.1:${backend_port};
-    proxy_http_version 1.1;
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto https;
-
-    proxy_ssl_server_name on;
-    proxy_ssl_name ${proxy_server_name};
-    proxy_ssl_verify on;
-    proxy_ssl_trusted_certificate ${TLS_CA_FILE};
-    proxy_ssl_certificate ${TLS_NGINX_CLIENT_CERT_FILE};
-    proxy_ssl_certificate_key ${TLS_NGINX_CLIENT_KEY_FILE};
-  }
-}
-EOF
+  sed \
+    -e "s|__SERVER_NAME__|${proxy_server_name}|g" \
+    -e "s|__BACKEND_PORT__|${backend_port}|g" \
+    -e "s|__TLS_CERT_FILE__|${TLS_CERT_FILE}|g" \
+    -e "s|__TLS_KEY_FILE__|${TLS_KEY_FILE}|g" \
+    -e "s|__TLS_CA_FILE__|${TLS_CA_FILE}|g" \
+    -e "s|__TLS_NGINX_CLIENT_CERT_FILE__|${TLS_NGINX_CLIENT_CERT_FILE}|g" \
+    -e "s|__TLS_NGINX_CLIENT_KEY_FILE__|${TLS_NGINX_CLIENT_KEY_FILE}|g" \
+    "$NGINX_TEMPLATE_FILE" > "$conf_tmp"
 
   as_root install -m 0644 -o root -g root "$conf_tmp" "$NGINX_CONF_FILE"
   as_root nginx -t
@@ -581,6 +557,7 @@ EOF
   as_root systemctl enable "$NGINX_SERVICE_NAME"
   as_root systemctl restart "$NGINX_SERVICE_NAME"
   log "nginx reverse proxy ready: https://${proxy_server_name} -> 127.0.0.1:${backend_port}"
+  log "nginx template: ${NGINX_TEMPLATE_FILE}"
 }
 
 install_systemd_service() {

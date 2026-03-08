@@ -1,6 +1,6 @@
 import { useTheme } from "next-themes";
 import { useState } from "react";
-import { Outlet, useNavigate } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import AdminSidebar from "@/components/admin-sidebar";
 import AdminTopDock from "@/components/admin-top-dock";
@@ -10,11 +10,13 @@ import { cn } from "@/lib/utils";
 
 export default function AdminLayout() {
   const { resolvedTheme } = useTheme();
+  const location = useLocation();
   const navigate = useNavigate();
   const { clearModules } = useEnabledModules();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const isDark = resolvedTheme !== "light";
+  const isModulePage = location.pathname === "/module";
   const shellBackground = isDark
     ? "linear-gradient(150deg, #070d1f 0%, #0c152c 45%, #0a1022 100%)"
     : "linear-gradient(145deg, #f2f4f8 0%, #eceff5 45%, #e8ebf1 100%)";
@@ -45,7 +47,14 @@ export default function AdminLayout() {
 
         <div className="flex min-h-screen min-w-0 flex-1 flex-col gap-3 p-4 lg:p-5">
           <AdminTopDock />
-          <div className="min-h-0 flex-1 overflow-auto rounded-[16px] border border-white/10 bg-white/35 p-1 dark:bg-white/[0.02]">
+          <div
+            className={cn(
+              "min-h-0 flex-1 overflow-auto",
+              isModulePage
+                ? "p-0"
+                : "rounded-[16px] border border-white/10 bg-white/35 p-1 dark:bg-white/[0.02]",
+            )}
+          >
             <Outlet />
           </div>
         </div>

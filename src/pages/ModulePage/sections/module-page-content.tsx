@@ -84,8 +84,10 @@ export function ModulePageContent({
                 <div
                   key={item.cardID}
                   className={cn(
-                    "flex min-h-[220px] flex-col p-2",
-                    isDark ? "border-white/0 bg-transparent" : "border-slate-200/0 bg-transparent",
+                    "flex min-h-[220px] flex-col rounded-2xl border p-3",
+                    isDark
+                      ? "border-white/10 bg-slate-950/35 shadow-[0_10px_30px_-20px_rgba(2,6,23,0.9)]"
+                      : "border-slate-200/90 bg-white/85 shadow-[0_10px_30px_-20px_rgba(15,23,42,0.22)]",
                   )}
                 >
                   <div className="flex items-center gap-2">

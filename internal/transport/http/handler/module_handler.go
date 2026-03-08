@@ -25,6 +25,12 @@ type EnabledModuleHandler struct {
 	InstallSv *installsvc.ModuleInstallService
 }
 
+const (
+	moduleInstallStreamTimeout     = 45 * time.Minute
+	moduleReinstallStreamTimeout   = 15 * time.Minute
+	moduleInstallSSEHeartbeatEvery = 10 * time.Second
+)
+
 func NewEnabledModuleHandler(svc *service.EnabledModuleService, installSvc *installsvc.ModuleInstallService) *EnabledModuleHandler {
 	return &EnabledModuleHandler{
 		Svc:       svc,
@@ -154,13 +160,14 @@ func (h *EnabledModuleHandler) InstallStream(c *gin.Context) {
 	}
 
 	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
+	c.Header("Cache-Control", "no-cache, no-transform")
+	c.Header("Content-Encoding", "identity")
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 	c.Status(http.StatusOK)
 	flusher.Flush()
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), moduleInstallStreamTimeout)
 	defer cancel()
 
 	var writeMu sync.Mutex
@@ -197,8 +204,19 @@ func (h *EnabledModuleHandler) InstallStream(c *gin.Context) {
 		flusher.Flush()
 		return nil
 	}
+	emitEvent := func(eventType string, stage string, message string, data any) bool {
+		if err := writeEvent(eventType, stage, message, data); err != nil {
+			cancel()
+			return false
+		}
+		return true
+	}
+	stopHeartbeat := startSSEHeartbeat(ctx, c.Writer, flusher, &writeMu, cancel, moduleInstallSSEHeartbeatEvery)
+	defer stopHeartbeat()
 
-	_ = writeEvent("log", "ui", "stream connected, start install", nil)
+	if !emitEvent("log", "ui", "stream connected, start install", nil) {
+		return
+	}
 
 	result, err := h.InstallSv.InstallWithLog(ctx, installsvc.ModuleInstallRequest{
 		ModuleName:            moduleName,
@@ -214,14 +232,20 @@ func (h *EnabledModuleHandler) InstallStream(c *gin.Context) {
 		SSHPrivateKey:         normalizeOptionalSecret(req.SSHPrivateKey),
 		SSHHostKeyFingerprint: normalizeOptionalSecret(req.SSHHostKeyFingerprint),
 	}, func(stage, message string) {
-		_ = writeEvent("log", stage, message, nil)
+		_ = emitEvent("log", stage, message, nil)
 	})
 	if err != nil {
-		_ = writeEvent("error", "service", err.Error(), nil)
+		if ctx.Err() != nil {
+			return
+		}
+		_ = emitEvent("error", "service", err.Error(), nil)
 		return
 	}
 
-	_ = writeEvent("result", "service", "module install completed", buildModuleInstallResponse(*result))
+	if ctx.Err() != nil {
+		return
+	}
+	_ = emitEvent("result", "service", "module install completed", buildModuleInstallResponse(*result))
 }
 
 func (h *EnabledModuleHandler) ReinstallCert(c *gin.Context) {
@@ -290,13 +314,14 @@ func (h *EnabledModuleHandler) ReinstallCertStream(c *gin.Context) {
 	}
 
 	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
+	c.Header("Cache-Control", "no-cache, no-transform")
+	c.Header("Content-Encoding", "identity")
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 	c.Status(http.StatusOK)
 	flusher.Flush()
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), moduleReinstallStreamTimeout)
 	defer cancel()
 
 	var writeMu sync.Mutex
@@ -333,20 +358,37 @@ func (h *EnabledModuleHandler) ReinstallCertStream(c *gin.Context) {
 		flusher.Flush()
 		return nil
 	}
+	emitEvent := func(eventType string, stage string, message string, data any) bool {
+		if err := writeEvent(eventType, stage, message, data); err != nil {
+			cancel()
+			return false
+		}
+		return true
+	}
+	stopHeartbeat := startSSEHeartbeat(ctx, c.Writer, flusher, &writeMu, cancel, moduleInstallSSEHeartbeatEvery)
+	defer stopHeartbeat()
 
-	_ = writeEvent("log", "ui", "stream connected, start reinstall cert", nil)
+	if !emitEvent("log", "ui", "stream connected, start reinstall cert", nil) {
+		return
+	}
 
 	result, err := h.InstallSv.ReinstallCertWithLog(ctx, installsvc.ModuleReinstallCertRequest{
 		ModuleName: moduleName,
 	}, func(stage, message string) {
-		_ = writeEvent("log", stage, message, nil)
+		_ = emitEvent("log", stage, message, nil)
 	})
 	if err != nil {
-		_ = writeEvent("error", "service", err.Error(), nil)
+		if ctx.Err() != nil {
+			return
+		}
+		_ = emitEvent("error", "service", err.Error(), nil)
 		return
 	}
 
-	_ = writeEvent("result", "service", "module cert reinstalled", buildModuleReinstallCertResponse(*result))
+	if ctx.Err() != nil {
+		return
+	}
+	_ = emitEvent("result", "service", "module cert reinstalled", buildModuleReinstallCertResponse(*result))
 }
 
 func normalizeOptionalSecret(raw *string) *string {
@@ -358,6 +400,49 @@ func normalizeOptionalSecret(raw *string) *string {
 		return nil
 	}
 	return &trimmed
+}
+
+func startSSEHeartbeat(
+	ctx context.Context,
+	w gin.ResponseWriter,
+	flusher http.Flusher,
+	mu *sync.Mutex,
+	cancel context.CancelFunc,
+	interval time.Duration,
+) func() {
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-done:
+				return
+			case <-ticker.C:
+				var writeErr error
+				mu.Lock()
+				_, writeErr = w.Write([]byte(": keepalive\n\n"))
+				if writeErr == nil {
+					flusher.Flush()
+				}
+				mu.Unlock()
+				if writeErr != nil {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+
+	return func() {
+		close(done)
+	}
 }
 
 func buildModuleInstallResponse(item installsvc.ModuleInstallResult) resdto.ModuleInstallResult {
