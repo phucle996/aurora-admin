@@ -201,7 +201,7 @@ async function requestEnabledModules(): Promise<{
     `${resolveAdminBaseURL()}/api/v1/modules/status`,
     {
       withCredentials: true,
-      timeout: 10000,
+      timeout: 20000,
     },
   );
 

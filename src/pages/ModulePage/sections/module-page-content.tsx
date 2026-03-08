@@ -44,7 +44,7 @@ export function ModulePageContent({
 
   return (
     <div>
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
+      <header className="flex flex-wrap items-center justify-between gap-3 px-1 py-2">
         <div>
           <h1 className={cn("text-lg font-semibold", textPrimary)}>
             Runtime Module
@@ -72,7 +72,7 @@ export function ModulePageContent({
         </div>
       </header>
 
-      <div className="space-y-4 p-4">
+      <div className="space-y-4 py-3">
       <section className="space-y-3">
         {filteredCards.length === 0 ? (
           <p className={cn("text-sm", textMuted)}>Khong co module phu hop bo loc.</p>
@@ -84,14 +84,12 @@ export function ModulePageContent({
                 <div
                   key={item.cardID}
                   className={cn(
-                    "flex min-h-[220px] flex-col rounded-xl border p-3",
-                    isDark ? "border-white/10 bg-white/[0.02]" : "border-slate-200 bg-slate-50/60",
+                    "flex min-h-[220px] flex-col p-2",
+                    isDark ? "border-white/0 bg-transparent" : "border-slate-200/0 bg-transparent",
                   )}
                 >
                   <div className="flex items-center gap-2">
-                    <div className={cn("rounded-md border p-1.5", isDark ? "border-white/10" : "border-slate-200")}>
-                      <Icon className="h-4 w-4" />
-                    </div>
+                    <Icon className="h-4 w-4" />
                     <p className={cn("truncate text-sm font-semibold", textPrimary)}>{item.label}</p>
                   </div>
 

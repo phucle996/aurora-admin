@@ -73,16 +73,24 @@ func installModuleTLSOnTarget(
 	certB64 := base64.StdEncoding.EncodeToString(bundle.CertPEM)
 	keyB64 := base64.StdEncoding.EncodeToString(bundle.KeyPEM)
 	caB64 := base64.StdEncoding.EncodeToString(bundle.CAPEM)
+	sudoPasswordB64 := ""
+	if target.Password != nil {
+		sudoPasswordB64 = base64.StdEncoding.EncodeToString([]byte(*target.Password))
+	}
 
 	ownerUser := "aurora"
 	ownerGroup := "aurora"
 	script := strings.Join([]string{
 		"set -e",
+		"sudo_pw_b64=" + shellEscape(sudoPasswordB64),
+		`sudo_pw=""`,
+		`if [ -n "$sudo_pw_b64" ]; then sudo_pw="$(printf '%s' "$sudo_pw_b64" | base64 -d 2>/dev/null || true)"; fi`,
 		`ensure_root(){`,
 		`  if [ "$(id -u)" -eq 0 ]; then "$@"; return; fi`,
 		`  if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then sudo -n "$@"; return; fi`,
+		`  if command -v sudo >/dev/null 2>&1 && [ -n "$sudo_pw" ]; then printf '%s\n' "$sudo_pw" | sudo -S -k "$@"; return $?; fi`,
 		`  if "$@" >/dev/null 2>&1; then return; fi`,
-		`  echo "need root or passwordless sudo to write tls files under /etc/aurora/certs" >&2`,
+		`  echo "need root or sudo to write tls files under /etc/aurora/certs" >&2`,
 		`  exit 1`,
 		`}`,
 		`if ! id -u ` + shellEscape(ownerUser) + ` >/dev/null 2>&1; then owner_user="root"; owner_group="root"; else owner_user=` + shellEscape(ownerUser) + `; owner_group="$(id -gn ` + ownerUser + ` 2>/dev/null || echo ` + ownerGroup + `)"; fi`,

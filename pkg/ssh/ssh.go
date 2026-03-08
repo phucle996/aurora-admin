@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -54,9 +56,6 @@ func Run(ctx context.Context, input RunInput) (*RunResult, error) {
 
 	password := normalizePasswordPtr(input.Password)
 	privateKey := trimStringPtr(input.PrivateKey)
-	if password == nil && privateKey == nil {
-		return nil, errors.New("ssh password or private key is required")
-	}
 	expectedFingerprint := normalizeFingerprintPtr(input.HostKeyFingerprint)
 	if expectedFingerprint == nil {
 		return nil, errors.New("ssh host key fingerprint is required")
@@ -65,10 +64,15 @@ func Run(ctx context.Context, input RunInput) (*RunResult, error) {
 	authMethods := make([]xssh.AuthMethod, 0, 3)
 	if privateKey != nil {
 		signer, err := xssh.ParsePrivateKey([]byte(*privateKey))
-		if err != nil {
+		if err != nil && password == nil {
 			return nil, fmt.Errorf("invalid private key: %w", err)
 		}
-		authMethods = append(authMethods, xssh.PublicKeys(signer))
+		if err == nil {
+			authMethods = append(authMethods, xssh.PublicKeys(signer))
+		}
+	}
+	if len(authMethods) == 0 {
+		authMethods = append(authMethods, loadDefaultKeyAuthMethods()...)
 	}
 	if password != nil {
 		authMethods = append(authMethods, xssh.Password(*password))
@@ -224,6 +228,34 @@ func scanPipeLines(r io.Reader, onLine func(line string), appendOutput func(line
 		}
 	}
 	return scanner.Err()
+}
+
+func loadDefaultKeyAuthMethods() []xssh.AuthMethod {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return nil
+	}
+
+	candidates := []string{
+		filepath.Join(home, ".ssh", "id_ed25519"),
+		filepath.Join(home, ".ssh", "id_rsa"),
+		filepath.Join(home, ".ssh", "id_ecdsa"),
+		filepath.Join(home, ".ssh", "id_dsa"),
+	}
+
+	methods := make([]xssh.AuthMethod, 0, len(candidates))
+	for _, path := range candidates {
+		key, readErr := os.ReadFile(path)
+		if readErr != nil {
+			continue
+		}
+		signer, parseErr := xssh.ParsePrivateKey(key)
+		if parseErr != nil {
+			continue
+		}
+		methods = append(methods, xssh.PublicKeys(signer))
+	}
+	return methods
 }
 
 func trimStringPtr(v *string) *string {

@@ -122,11 +122,8 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 	}
 
 	scope := normalizeScope(req.Scope)
-	if scope != ModuleInstallScopeLocal && scope != ModuleInstallScopeRemote {
+	if scope != ModuleInstallScopeRemote {
 		return nil, errorvar.ErrModuleInstallScope
-	}
-	if scope == ModuleInstallScopeLocal && strings.TrimSpace(req.InstallCommand) != "" {
-		return nil, errorvar.ErrModuleInstallCommand
 	}
 
 	appHost := strings.TrimSpace(req.AppHost)

@@ -16,11 +16,10 @@ type LoginResponsePayload = {
 export function resolveAdminBaseURL(): string {
   const adminBaseURL = import.meta.env.VITE_ADMIN_API_BASE_URL?.toString()?.trim();
   if (adminBaseURL) {
-    return adminBaseURL;
+    return adminBaseURL.replace(/\/+$/, "");
   }
-  const fallback = import.meta.env.VITE_API_URL?.toString()?.trim();
-  if (fallback) {
-    return fallback;
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return window.location.origin;
   }
   return "";
 }

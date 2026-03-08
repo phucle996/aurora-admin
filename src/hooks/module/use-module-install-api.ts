@@ -2,7 +2,7 @@ import axios from "axios";
 
 import { resolveAdminBaseURL } from "@/lib/admin-auth";
 
-export type ModuleInstallScope = "local" | "remote";
+export type ModuleInstallScope = "remote";
 
 export type ModuleInstallPayload = {
   module_name: string;

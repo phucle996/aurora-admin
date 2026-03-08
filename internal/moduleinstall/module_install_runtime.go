@@ -152,23 +152,6 @@ func buildInstallTarget(scope string, req ModuleInstallRequest) (moduleInstallTa
 	}
 
 	switch scope {
-	case ModuleInstallScopeLocal:
-		target.Username = strings.TrimSpace(req.SSHUsername)
-		if target.Username == "" {
-			target.Username = "aurora"
-		}
-		target.Host = normalizeAddress(req.SSHHost)
-		if target.Host != "" && !isValidHost(target.Host) {
-			return target, fmt.Errorf("ssh_host is invalid")
-		}
-		if target.Host == "" {
-			target.Host = detectLocalIPv4()
-		}
-		target.Port = normalizePort(req.SSHPort)
-		target.Password = nil
-		target.PrivateKey = nil
-		target.HostKeyFingerprint = nil
-		return target, nil
 	case ModuleInstallScopeRemote:
 		target.Username = strings.TrimSpace(req.SSHUsername)
 		target.Host = normalizeAddress(req.SSHHost)
@@ -181,9 +164,6 @@ func buildInstallTarget(scope string, req ModuleInstallRequest) (moduleInstallTa
 		target.HostKeyFingerprint = normalizeOptionalSecret(req.SSHHostKeyFingerprint)
 		if target.Username == "" || target.Host == "" {
 			return target, fmt.Errorf("ssh_username and ssh_host are required for remote install")
-		}
-		if target.Password == nil && target.PrivateKey == nil {
-			return target, fmt.Errorf("ssh_password or ssh_private_key is required for remote install")
 		}
 		if target.HostKeyFingerprint == nil {
 			return target, fmt.Errorf("ssh_host_key_fingerprint is required for remote install")
@@ -353,6 +333,9 @@ func normalizeModuleName(raw string) string {
 }
 
 func resolveInstallEndpoint(scope string, appHost string, appPort int32, fallbackEndpoint string) (string, int32, error) {
+	if normalizeScope(scope) != ModuleInstallScopeRemote {
+		return "", 0, errorvar.ErrModuleInstallScope
+	}
 	host := normalizeAddress(appHost)
 	if host == "" {
 		return "", 0, fmt.Errorf("app_host is invalid")
@@ -377,19 +360,11 @@ func resolveInstallEndpoint(scope string, appHost string, appPort int32, fallbac
 	}
 
 	if port == 0 {
-		if scope == ModuleInstallScopeLocal {
-			randomPort, err := randomAvailableLocalPort()
-			if err != nil {
-				return "", 0, fmt.Errorf("generate random app_port failed: %w", err)
-			}
-			port = randomPort
-		} else {
-			randomPort, err := randomInstallPort()
-			if err != nil {
-				return "", 0, fmt.Errorf("generate random app_port failed: %w", err)
-			}
-			port = randomPort
+		randomPort, err := randomInstallPort()
+		if err != nil {
+			return "", 0, fmt.Errorf("generate random app_port failed: %w", err)
 		}
+		port = randomPort
 	}
 
 	return host, port, nil
@@ -638,8 +613,15 @@ func ensureCurlAndCheckEndpoint(
 	}
 
 	tlsPaths := resolveModuleTLSPaths(moduleName)
+	sudoPasswordB64 := ""
+	if target.Password != nil {
+		sudoPasswordB64 = base64.StdEncoding.EncodeToString([]byte(*target.Password))
+	}
 	healthScript := strings.Join([]string{
 		"set -e",
+		"sudo_pw_b64=" + shellEscape(sudoPasswordB64),
+		`sudo_pw=""`,
+		`if [ -n "$sudo_pw_b64" ]; then sudo_pw="$(printf '%s' "$sudo_pw_b64" | base64 -d 2>/dev/null || true)"; fi`,
 		"cert_path=" + shellEscape(tlsPaths.CertPath),
 		"key_path=" + shellEscape(tlsPaths.KeyPath),
 		"ca_path=" + shellEscape(tlsPaths.CAPath),
@@ -656,7 +638,8 @@ func ensureCurlAndCheckEndpoint(
 		"  if [ -z \"$install_cmd\" ] && command -v zypper >/dev/null 2>&1; then install_cmd='zypper --non-interactive install curl'; fi",
 		"  if [ -z \"$install_cmd\" ]; then echo 'cannot install curl automatically'; return 1; fi",
 		"  if [ \"$(id -u)\" -eq 0 ]; then sh -lc \"$install_cmd\"; return $?; fi",
-		"  if command -v sudo >/dev/null 2>&1; then sudo sh -lc \"$install_cmd\"; return $?; fi",
+		"  if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then sudo -n sh -lc \"$install_cmd\"; return $?; fi",
+		"  if command -v sudo >/dev/null 2>&1 && [ -n \"$sudo_pw\" ]; then printf '%s\\n' \"$sudo_pw\" | sudo -S -k sh -lc \"$install_cmd\"; return $?; fi",
 		"  echo 'need root/sudo to install curl'; return 1",
 		"}",
 		"ensure_curl",

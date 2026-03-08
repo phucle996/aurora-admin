@@ -27,7 +27,7 @@ export default function ModulePage() {
   const [installDialogOpen, setInstallDialogOpen] = useState(false);
   const [installSubmitting, setInstallSubmitting] = useState(false);
   const [installTarget, setInstallTarget] = useState<ModuleStatusCard | null>(null);
-  const [installScope, setInstallScope] = useState<ModuleInstallScope>("local");
+  const [installScope] = useState<ModuleInstallScope>("remote");
   const [appHost, setAppHost] = useState("");
   const [appPort, setAppPort] = useState("");
   const [sshHost, setSshHost] = useState("");
@@ -86,7 +86,6 @@ export default function ModulePage() {
     const defaultHost = `${moduleID}.aurora.local`;
 
     setInstallTarget(item);
-    setInstallScope("local");
     setAppHost(defaultHost);
     setAppPort("");
     setSshHost("");
@@ -141,13 +140,11 @@ export default function ModulePage() {
     }
 
     if (
-      installScope === "remote" &&
-      (!sshHost.trim() ||
-        !sshUsername.trim() ||
-        (!sshPassword.trim() && !sshPrivateKey.trim()) ||
-        !sshHostKeyFingerprint.trim())
+      !sshHost.trim() ||
+      !sshUsername.trim() ||
+      !sshHostKeyFingerprint.trim()
     ) {
-      toast.error("Remote install can ssh host, username, password/private key va host key fingerprint");
+      toast.error("Remote install can ssh host, username va host key fingerprint");
       return;
     }
 
@@ -298,29 +295,26 @@ export default function ModulePage() {
 
   return (
     <main className="py-2">
-      <section className="overflow-hidden rounded-[22px] border border-white/10 bg-white/35 dark:bg-white/[0.02]">
-        <ModulePageContent
-          isDark={isDark}
-          textPrimary={textPrimary}
-          textMuted={textMuted}
-          status={status}
-          error={error}
-          lastFetchedAt={lastFetchedAt}
-          searchQuery={searchQuery}
-          filteredCards={filteredCards}
-          onSearchQueryChange={setSearchQuery}
-          onRefresh={handleRefresh}
-          onInstall={openInstallDialog}
-          onReinstallCert={handleReinstallCert}
-          actionRunning={installRunning || installSubmitting}
-        />
-      </section>
+      <ModulePageContent
+        isDark={isDark}
+        textPrimary={textPrimary}
+        textMuted={textMuted}
+        status={status}
+        error={error}
+        lastFetchedAt={lastFetchedAt}
+        searchQuery={searchQuery}
+        filteredCards={filteredCards}
+        onSearchQueryChange={setSearchQuery}
+        onRefresh={handleRefresh}
+        onInstall={openInstallDialog}
+        onReinstallCert={handleReinstallCert}
+        actionRunning={installRunning || installSubmitting}
+      />
 
       <ModuleInstallDialog
         open={installDialogOpen}
         installSubmitting={installSubmitting}
         installTarget={installTarget}
-        installScope={installScope}
         appHost={appHost}
         appPort={appPort}
         sshHost={sshHost}
@@ -330,7 +324,6 @@ export default function ModulePage() {
         sshPrivateKey={sshPrivateKey}
         sshHostKeyFingerprint={sshHostKeyFingerprint}
         onOpenChange={setInstallDialogOpen}
-        onInstallScopeChange={setInstallScope}
         onAppHostChange={setAppHost}
         onAppPortChange={setAppPort}
         onSshHostChange={setSshHost}
