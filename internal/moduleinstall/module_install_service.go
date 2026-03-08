@@ -196,7 +196,7 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 			}
 			uiEnvPath = envRemotePath
 		}
-		command = s.buildDefaultInstallCommand(moduleName, appHost, endpointPort, adminRPCEndpoint, uiEnvPath)
+		command = s.buildDefaultInstallCommand(moduleName, appHost, endpointPort, adminRPCEndpoint, uiEnvPath, target.Password)
 		if command != "" {
 			logInstall(logFn, "install", "resolved default install command for module=%s", moduleName)
 		}
@@ -306,6 +306,7 @@ func (s *ModuleInstallService) buildDefaultInstallCommand(
 	appPort int32,
 	adminRPCEndpoint string,
 	uiEnvPath string,
+	sudoPassword *string,
 ) string {
 	scriptURL := s.installScriptURL(moduleName)
 	return buildDefaultModuleInstallCommand(
@@ -315,6 +316,7 @@ func (s *ModuleInstallService) buildDefaultInstallCommand(
 		appPort,
 		adminRPCEndpoint,
 		uiEnvPath,
+		sudoPassword,
 	)
 }
 

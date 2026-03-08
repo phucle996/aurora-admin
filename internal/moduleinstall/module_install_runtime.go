@@ -424,6 +424,7 @@ func buildDefaultModuleInstallCommand(
 	appPort int32,
 	adminRPCEndpoint string,
 	uiEnvPath string,
+	sudoPassword *string,
 ) string {
 	args := []string{}
 
@@ -466,10 +467,18 @@ func buildDefaultModuleInstallCommand(
 	for _, arg := range args {
 		escapedArgs = append(escapedArgs, shellEscape(arg))
 	}
+	runScriptCmd := "\"$tmp_script\" " + strings.Join(escapedArgs, " ")
+	sudoPasswordB64 := ""
+	if sudoPassword != nil {
+		sudoPasswordB64 = base64.StdEncoding.EncodeToString([]byte(*sudoPassword))
+	}
 
 	installScript := strings.Join([]string{
 		"set -e",
 		"script_url=" + shellEscape(scriptURL),
+		"sudo_pw_b64=" + shellEscape(sudoPasswordB64),
+		`sudo_pw=""`,
+		`if [ -n "$sudo_pw_b64" ]; then sudo_pw="$(printf '%s' "$sudo_pw_b64" | base64 -d 2>/dev/null || true)"; fi`,
 		"tmp_script=\"$(mktemp)\"",
 		"cleanup(){ rm -f \"$tmp_script\"; }",
 		"trap cleanup EXIT",
@@ -486,7 +495,15 @@ func buildDefaultModuleInstallCommand(
 		"  curl -fsSL \"$script_url\" -o \"$tmp_script\"",
 		"fi",
 		"chmod +x \"$tmp_script\"",
-		"\"$tmp_script\" " + strings.Join(escapedArgs, " "),
+		"if [ \"$(id -u)\" -eq 0 ]; then",
+		"  " + runScriptCmd,
+		"elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then",
+		"  " + strings.ReplaceAll(runScriptCmd, `"$tmp_script"`, `sudo -n "$tmp_script"`),
+		"elif command -v sudo >/dev/null 2>&1 && [ -n \"$sudo_pw\" ]; then",
+		"  printf '%s\\n' \"$sudo_pw\" | sudo -S -k -p '' \"$tmp_script\" " + strings.Join(escapedArgs, " "),
+		"else",
+		"  " + runScriptCmd,
+		"fi",
 	}, "\n")
 
 	return installScript
