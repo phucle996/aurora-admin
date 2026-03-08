@@ -557,10 +557,12 @@ render_nginx_template() {
   local dst="$2"
   local app_host="$3"
   local backend_port="$4"
+  local brotli_enabled="0"
 
   if nginx_supports_brotli; then
     sed '/^## __BROTLI_BEGIN__$/d; /^## __BROTLI_END__$/d' "$src" > "$dst"
     log "nginx brotli: enabled"
+    brotli_enabled="1"
   else
     sed '/^## __BROTLI_BEGIN__$/,/^## __BROTLI_END__$/d' "$src" > "$dst"
     log "nginx brotli: not available, fallback to gzip"
@@ -576,6 +578,69 @@ render_nginx_template() {
     -e "s|__TLS_NGINX_CLIENT_KEY_FILE__|${TLS_NGINX_CLIENT_KEY_FILE}|g" \
     -e "s|__NGINX_CACHE_DIR__|${NGINX_CACHE_DIR}|g" \
     "$dst"
+
+  normalize_nginx_compression "$dst" "$brotli_enabled"
+}
+
+normalize_nginx_compression() {
+  local file="$1"
+  local brotli_enabled="$2"
+  local tmp_file="${TMP_DIR}/aurora-admin-nginx.normalized.conf"
+
+  awk -v brotli="$brotli_enabled" '
+    BEGIN {
+      seen_server = 0
+      skip_global_types = 0
+      injected = 0
+    }
+    {
+      line = $0
+
+      if (line ~ /^[[:space:]]*server[[:space:]]*\{/) {
+        seen_server = 1
+      }
+
+      if (!seen_server) {
+        if (skip_global_types) {
+          if (line ~ /;/) {
+            skip_global_types = 0
+          }
+          next
+        }
+        if (line ~ /^[[:space:]]*(brotli_types|gzip_types)[[:space:]]*$/ || line ~ /^[[:space:]]*(brotli_types|gzip_types)[[:space:]]+/) {
+          if (line !~ /;/) {
+            skip_global_types = 1
+          }
+          next
+        }
+        if (line ~ /^[[:space:]]*(brotli(_[a-z_]+)?|gzip(_[a-z_]+)?)[[:space:]]+/) {
+          next
+        }
+      }
+
+      print line
+
+      if (!injected && line ~ /^[[:space:]]*ssl_prefer_server_ciphers[[:space:]]+off;/) {
+        print ""
+        if (brotli == "1") {
+          print "  brotli on;"
+          print "  brotli_static on;"
+          print "  brotli_comp_level 5;"
+          print "  brotli_min_length 512;"
+          print "  brotli_types text/plain text/css text/xml text/javascript application/javascript application/x-javascript application/json application/xml application/rss+xml application/wasm image/svg+xml;"
+        }
+        print "  gzip on;"
+        print "  gzip_vary on;"
+        print "  gzip_comp_level 5;"
+        print "  gzip_min_length 512;"
+        print "  gzip_proxied any;"
+        print "  gzip_types text/plain text/css text/xml text/javascript application/javascript application/x-javascript application/json application/xml application/rss+xml application/wasm image/svg+xml;"
+        injected = 1
+      }
+    }
+  ' "$file" > "$tmp_file"
+
+  mv "$tmp_file" "$file"
 }
 
 ensure_nginx_template_file() {
