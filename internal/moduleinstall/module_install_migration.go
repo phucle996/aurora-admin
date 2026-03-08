@@ -9,12 +9,13 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 func materializeMigrations(
@@ -250,71 +251,63 @@ func normalizeSchemaPrefix(raw string) string {
 	return value
 }
 
-func createSchemaWithPSQL(ctx context.Context, databaseURL string, schema string) error {
+func createSchemaWithSQL(ctx context.Context, databaseURL string, schema string) error {
 	sql := "CREATE SCHEMA IF NOT EXISTS " + quoteSQLIdentifier(schema) + ";"
-	command := exec.CommandContext(
-		ctx,
-		"psql",
-		"-X",
-		databaseURL,
-		"-v", "ON_ERROR_STOP=1",
-		"-c", sql,
-	)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("psql create schema failed: %s", strings.TrimSpace(string(output)))
-	}
-	return nil
+	return execSQL(ctx, databaseURL, sql)
 }
 
-func dropSchemaWithPSQL(ctx context.Context, databaseURL string, schema string) error {
+func dropSchemaWithSQL(ctx context.Context, databaseURL string, schema string) error {
 	cleanSchema := strings.TrimSpace(schema)
 	if cleanSchema == "" {
 		return nil
 	}
 
 	sql := "DROP SCHEMA IF EXISTS " + quoteSQLIdentifier(cleanSchema) + " CASCADE;"
-	command := exec.CommandContext(
-		ctx,
-		"psql",
-		"-X",
-		databaseURL,
-		"-v", "ON_ERROR_STOP=1",
-		"-c", sql,
-	)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("psql drop schema failed: %s", strings.TrimSpace(string(output)))
-	}
-	return nil
+	return execSQL(ctx, databaseURL, sql)
 }
 
-func runMigrationFilesWithPSQL(
+func runMigrationFilesWithSQL(
 	ctx context.Context,
 	databaseURL string,
 	schema string,
 	migrationFiles []string,
 	logFn InstallLogFn,
 ) error {
+	connection, err := pgx.Connect(ctx, strings.TrimSpace(databaseURL))
+	if err != nil {
+		return fmt.Errorf("postgres connect failed: %w", err)
+	}
+	defer connection.Close(ctx)
+
 	searchPathSQL := "SET search_path TO " + quoteSQLIdentifier(schema) + ", public;"
 
 	for _, file := range migrationFiles {
 		filename := filepath.Base(file)
 		logInstall(logFn, "migration", "running %s", filename)
-		command := exec.CommandContext(
-			ctx,
-			"psql",
-			"-X",
-			databaseURL,
-			"-v", "ON_ERROR_STOP=1",
-			"-c", searchPathSQL,
-			"-f", file,
-		)
-		output, err := command.CombinedOutput()
+		payload, readErr := os.ReadFile(file)
+		if readErr != nil {
+			return fmt.Errorf("read migration %s failed: %w", filename, readErr)
+		}
+		sql := searchPathSQL + "\n" + string(payload)
+
+		_, err = connection.Exec(ctx, sql)
 		if err != nil {
-			return fmt.Errorf("apply migration %s failed: %s", filename, strings.TrimSpace(string(output)))
+			return fmt.Errorf("apply migration %s failed: %w", filename, err)
 		}
 		logInstall(logFn, "migration", "applied %s", filename)
+	}
+	return nil
+}
+
+func execSQL(ctx context.Context, databaseURL string, sql string) error {
+	connection, err := pgx.Connect(ctx, strings.TrimSpace(databaseURL))
+	if err != nil {
+		return fmt.Errorf("postgres connect failed: %w", err)
+	}
+	defer connection.Close(ctx)
+
+	if _, err := connection.Exec(ctx, sql); err != nil {
+		return fmt.Errorf("postgres exec failed: %w", err)
 	}
 	return nil
 }

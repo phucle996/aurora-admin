@@ -6,7 +6,6 @@ import (
 	"admin/pkg/errorvar"
 	"context"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -175,7 +174,7 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 		if strings.TrimSpace(rollbackSchemaName) != "" {
 			logInstall(logFn, "rollback", "rollback schema start schema=%s", rollbackSchemaName)
 			rollbackCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			dropErr := dropSchemaWithPSQL(rollbackCtx, s.databaseURL, rollbackSchemaName)
+			dropErr := dropSchemaWithSQL(rollbackCtx, s.databaseURL, rollbackSchemaName)
 			cancel()
 			if dropErr != nil {
 				logInstall(logFn, "rollback", "[error] rollback schema failed schema=%s", rollbackSchemaName)
@@ -343,9 +342,6 @@ func (s *ModuleInstallService) prepareSchemaAndMigrate(
 	if strings.TrimSpace(s.databaseURL) == "" {
 		return fmt.Errorf("database_url is empty for module %s", moduleName)
 	}
-	if _, err := exec.LookPath("psql"); err != nil {
-		return fmt.Errorf("psql client is required: %w", err)
-	}
 
 	migrationsDir, migrationSource, cleanup, err := materializeMigrations(ctx, moduleName, source)
 	if err != nil {
@@ -359,7 +355,7 @@ func (s *ModuleInstallService) prepareSchemaAndMigrate(
 		return fmt.Errorf("generate schema for %s failed: %w", moduleName, err)
 	}
 
-	if err := createSchemaWithPSQL(ctx, s.databaseURL, schemaName); err != nil {
+	if err := createSchemaWithSQL(ctx, s.databaseURL, schemaName); err != nil {
 		return fmt.Errorf("create schema failed: %w", err)
 	}
 	logInstall(logFn, "migration", "created schema=%s", schemaName)
@@ -389,7 +385,7 @@ func (s *ModuleInstallService) prepareSchemaAndMigrate(
 	}
 
 	logInstall(logFn, "migration", "apply migrations count=%d", len(migrationFiles))
-	if err := runMigrationFilesWithPSQL(ctx, s.databaseURL, schemaName, migrationFiles, logFn); err != nil {
+	if err := runMigrationFilesWithSQL(ctx, s.databaseURL, schemaName, migrationFiles, logFn); err != nil {
 		return err
 	}
 
