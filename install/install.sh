@@ -25,6 +25,7 @@ TLS_NGINX_CLIENT_KEY_FILE="${TLS_DIR}/nginx-client.key"
 NGINX_SERVICE_NAME="${AURORA_ADMIN_NGINX_SERVICE_NAME:-nginx}"
 NGINX_CONF_FILE="${AURORA_ADMIN_NGINX_CONF_FILE:-/etc/nginx/conf.d/aurora-admin.conf}"
 NGINX_TEMPLATE_FILE="${AURORA_ADMIN_NGINX_TEMPLATE_FILE:-${SCRIPT_DIR}/nginx.conf}"
+NGINX_TEMPLATE_URL="${AURORA_ADMIN_NGINX_TEMPLATE_URL:-}"
 NGINX_CACHE_DIR="${AURORA_ADMIN_NGINX_CACHE_DIR:-/var/cache/nginx/aurora-admin}"
 BACKEND_PORT_MIN="${AURORA_ADMIN_BACKEND_PORT_MIN:-20000}"
 BACKEND_PORT_MAX="${AURORA_ADMIN_BACKEND_PORT_MAX:-60000}"
@@ -577,10 +578,34 @@ render_nginx_template() {
     "$dst"
 }
 
+ensure_nginx_template_file() {
+  local release_tag="$1"
+  local conf_tmp fetch_url fallback_url
+  conf_tmp="${TMP_DIR}/aurora-admin-nginx.template.conf"
+
+  if [ -n "$NGINX_TEMPLATE_URL" ]; then
+    log "download nginx template from ${NGINX_TEMPLATE_URL}"
+    download "$NGINX_TEMPLATE_URL" "$conf_tmp"
+  else
+    fetch_url="https://raw.githubusercontent.com/${REPO}/${release_tag}/install/nginx.conf"
+    fallback_url="https://raw.githubusercontent.com/${REPO}/main/install/nginx.conf"
+    log "download nginx template from ${fetch_url}"
+    if ! download "$fetch_url" "$conf_tmp"; then
+      warn "cannot download nginx template from release tag, fallback to main"
+      download "$fallback_url" "$conf_tmp"
+    fi
+  fi
+
+  [ -s "$conf_tmp" ] || die "downloaded nginx template is empty"
+  NGINX_TEMPLATE_FILE="$conf_tmp"
+}
+
 install_nginx_reverse_proxy() {
+  local release_tag="$1"
   local app_host proxy_server_name backend_port conf_tmp
   ensure_nginx_installed
   ensure_nginx_cache_dir
+  ensure_nginx_template_file "$release_tag"
 
   app_host="$(read_env_value "APP_HOSTNAME" "$ENV_FILE")"
   [ -n "$app_host" ] || app_host="aurora-admin.local"
@@ -672,7 +697,7 @@ main() {
   install_tls_materials "$ENV_FILE"
   preflight_tls_materials
   install_systemd_service "$tag"
-  install_nginx_reverse_proxy
+  install_nginx_reverse_proxy "$tag"
   restart_service
   delete_source_env_if_needed "$INPUT_ENV_FILE"
 
