@@ -178,7 +178,13 @@ read_env_value() {
   local key="$1"
   local file="$2"
   local line
-  line="$(grep -E "^${key}=" "$file" | tail -n1 || true)"
+
+  if [ -r "$file" ]; then
+    line="$(awk -F= -v k="$key" '$1 == k { print substr($0, index($0, "=") + 1) }' "$file" | tail -n1 || true)"
+  else
+    line="$(as_root awk -F= -v k="$key" '$1 == k { print substr($0, index($0, "=") + 1) }' "$file" | tail -n1 || true)"
+  fi
+
   if [ -z "$line" ]; then
     printf '%s' ""
     return
@@ -497,7 +503,6 @@ ensure_nginx_installed() {
 
   log "install nginx"
   if command -v apt-get >/dev/null 2>&1; then
-    as_root apt-get update -y
     as_root apt-get install -y nginx
     return
   fi
