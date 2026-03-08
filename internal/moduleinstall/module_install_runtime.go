@@ -293,6 +293,13 @@ func parseEndpointTargetAndEndpoint(raw string) (moduleInstallTarget, string, bo
 	return out, strings.TrimSpace(endpoint), true
 }
 
+func resolveEndpointFromStoredValue(raw string) string {
+	if _, endpoint, ok := parseEndpointTargetAndEndpoint(raw); ok {
+		return strings.TrimSpace(endpoint)
+	}
+	return strings.TrimSpace(parseLegacyEndpointValue(raw))
+}
+
 func decodeBase64Secret(encoded string) ([]byte, bool) {
 	value := strings.TrimSpace(encoded)
 	if value == "" {
@@ -394,7 +401,7 @@ func resolveInstallEndpoint(scope string, appHost string, appPort int32, fallbac
 		}
 	}
 
-	return net.JoinHostPort(host, strconv.Itoa(int(port))), port, nil
+	return host, port, nil
 }
 
 func parsePortFromEndpoint(raw string) int32 {

@@ -114,17 +114,15 @@ func NewModules(
 
 	enabledModuleRepo := repository.NewEtcdEndpointRepository(etcdClient, keycfg.EndpointPrefix)
 	runtimeRepo := repository.NewEtcdRuntimeConfigRepository(etcdClient, keycfg.RuntimePrefix)
-	sharedCorsRepo := repository.NewEtcdRuntimeConfigRepository(etcdClient, keycfg.SharedCORSPrefix)
 	enabledModuleSvc := apisvc.NewEnabledModuleService(enabledModuleRepo)
 	moduleInstallSvc := installsvc.NewModuleInstallService(
 		enabledModuleRepo,
 		runtimeRepo,
-		sharedCorsRepo,
 		cfg.Database.URL,
 		cfg.ModuleInstall.UMSInstallScriptURL,
 		cfg.ModuleInstall.PlatformInstallScriptURL,
 	)
-	runtimeSvc := apisvc.NewRuntimeBootstrapService(runtimeRepo, sharedCorsRepo, enabledModuleRepo)
+	runtimeSvc := apisvc.NewRuntimeBootstrapService(runtimeRepo, enabledModuleRepo)
 
 	return &Modules{
 		Etcd:             etcdClient,

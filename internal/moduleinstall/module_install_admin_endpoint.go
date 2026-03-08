@@ -3,6 +3,7 @@ package moduleinstall
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 )
 
@@ -22,6 +23,9 @@ func (s *ModuleInstallService) resolveAdminBootstrapEndpoint(ctx context.Context
 		}
 		endpoint := resolveEndpointFromStoredValue(item.Value)
 		if endpoint != "" {
+			if strings.TrimSpace(endpointPort(endpoint)) == "" {
+				return net.JoinHostPort(endpoint, "443"), nil
+			}
 			return endpoint, nil
 		}
 	}

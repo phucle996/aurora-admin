@@ -13,15 +13,14 @@ import (
 )
 
 type AppCfg struct {
-	Name         string
-	HostName     string
-	Port         int
-	EndpointPort int
-	LogLV        string
-	TimeZone     string
-	TLSCert      string
-	TLSKey       string
-	TLSCA        string
+	Name     string
+	HostName string
+	Port     int
+	LogLV    string
+	TimeZone string
+	TLSCert  string
+	TLSKey   string
+	TLSCA    string
 }
 
 type EtcdCfg struct {
@@ -130,15 +129,14 @@ func LoadConfig() *Config {
 
 	return &Config{
 		App: AppCfg{
-			Name:         "Aurora Admin",
-			HostName:     getEnv("APP_HOSTNAME", "aurora-admin"),
-			Port:         getEnvAsInt("APP_PORT", 3009),
-			EndpointPort: getEnvAsInt("APP_ENDPOINT_PORT", getEnvAsInt("APP_PORT", 3009)),
-			LogLV:        getEnv("APP_LOG_LEVEL", "info"),
-			TimeZone:     getEnv("APP_TIMEZONE", "Asia/Ho_Chi_Minh"),
-			TLSCert:      "/etc/aurora/certs/admin.crt",
-			TLSKey:       "/etc/aurora/certs/admin.key",
-			TLSCA:        "/etc/aurora/certs/ca.crt",
+			Name:     "Aurora Admin",
+			HostName: getEnv("APP_HOSTNAME", "aurora-admin"),
+			Port:     getEnvAsInt("APP_PORT", 3009),
+			LogLV:    getEnv("APP_LOG_LEVEL", "info"),
+			TimeZone: getEnv("APP_TIMEZONE", "Asia/Ho_Chi_Minh"),
+			TLSCert:  "/etc/aurora/certs/admin.crt",
+			TLSKey:   "/etc/aurora/certs/admin.key",
+			TLSCA:    "/etc/aurora/certs/ca.crt",
 		},
 		Etcd: EtcdCfg{
 			Endpoints:            getEnvAsSlice("ETCD_ENDPOINTS", []string{"localhost:2379"}),
@@ -205,7 +203,10 @@ func LoadConfig() *Config {
 			Prefix: keycfg.CertStorePrefix,
 		},
 		Cors: CorsCfg{
-			AllowOrigins: []string{},
+			AllowOrigins: []string{
+				"https://localhost:80",
+				"https://localhost:443",
+			},
 			AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
 
 			AllowHeaders: []string{"Origin", "Content-Type", "Accept", "Authorization"},
@@ -328,46 +329,6 @@ func LoadRuntimeFromEtcd(ctx context.Context, cli *clientv3.Client, cfg *Config)
 	if cfg.TokenTTL.OttTTL, err = readRequiredDuration(values, keycfg.RTTTLOTT); err != nil {
 		return fmt.Errorf("invalid runtime config: %w", err)
 	}
-
-	corsValues, err := loadPrefixedValues(ctx, cli, keycfg.SharedCORSPrefix)
-	if err != nil {
-		return err
-	}
-	if len(corsValues) == 0 {
-		return fmt.Errorf("no key found in prefix %s", keycfg.SharedCORSPrefix)
-	}
-
-	allowOrigins, err := readRequiredSlice(corsValues, keycfg.SharedCORSAllowOrigins)
-	if err != nil {
-		return fmt.Errorf("invalid cors config: %w", err)
-	}
-	allowMethods, err := readRequiredSlice(corsValues, keycfg.SharedCORSAllowMethods)
-	if err != nil {
-		return fmt.Errorf("invalid cors config: %w", err)
-	}
-	allowHeaders, err := readRequiredSlice(corsValues, keycfg.SharedCORSAllowHeaders)
-	if err != nil {
-		return fmt.Errorf("invalid cors config: %w", err)
-	}
-	exposeHeaders, err := readRequiredSlice(corsValues, keycfg.SharedCORSExposeHeader)
-	if err != nil {
-		return fmt.Errorf("invalid cors config: %w", err)
-	}
-	allowCredentials, err := readRequiredBool(corsValues, keycfg.SharedCORSAllowCreds)
-	if err != nil {
-		return fmt.Errorf("invalid cors config: %w", err)
-	}
-	maxAge, err := readRequiredDuration(corsValues, keycfg.SharedCORSMaxAge)
-	if err != nil {
-		return fmt.Errorf("invalid cors config: %w", err)
-	}
-
-	cfg.Cors.AllowOrigins = allowOrigins
-	cfg.Cors.AllowMethods = allowMethods
-	cfg.Cors.AllowHeaders = allowHeaders
-	cfg.Cors.ExposeHeaders = exposeHeaders
-	cfg.Cors.AllowCredentials = allowCredentials
-	cfg.Cors.MaxAge = maxAge
 
 	return nil
 }

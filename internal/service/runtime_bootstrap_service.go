@@ -17,16 +17,14 @@ type RuntimeBootstrapRequest struct {
 }
 
 type RuntimeBootstrapService struct {
-	runtimeRepo    repository.RuntimeConfigRepository
-	sharedCorsRepo repository.RuntimeConfigRepository
-	endpointRepo   repository.EndpointRepository
+	runtimeRepo  repository.RuntimeConfigRepository
+	endpointRepo repository.EndpointRepository
 }
 
 type bootstrapValueSource string
 
 const (
-	bootstrapSourceRuntime    bootstrapValueSource = "runtime"
-	bootstrapSourceSharedCORS bootstrapValueSource = "shared_cors"
+	bootstrapSourceRuntime bootstrapValueSource = "runtime"
 )
 
 type bootstrapValueSpec struct {
@@ -38,13 +36,11 @@ type bootstrapValueSpec struct {
 
 func NewRuntimeBootstrapService(
 	runtimeRepo repository.RuntimeConfigRepository,
-	sharedCorsRepo repository.RuntimeConfigRepository,
 	endpointRepo repository.EndpointRepository,
 ) *RuntimeBootstrapService {
 	return &RuntimeBootstrapService{
-		runtimeRepo:    runtimeRepo,
-		sharedCorsRepo: sharedCorsRepo,
-		endpointRepo:   endpointRepo,
+		runtimeRepo:  runtimeRepo,
+		endpointRepo: endpointRepo,
 	}
 }
 
@@ -52,7 +48,7 @@ func (s *RuntimeBootstrapService) BuildRuntimeValues(
 	ctx context.Context,
 	req RuntimeBootstrapRequest,
 ) (map[string]string, error) {
-	if s == nil || s.runtimeRepo == nil || s.sharedCorsRepo == nil || s.endpointRepo == nil {
+	if s == nil || s.runtimeRepo == nil || s.endpointRepo == nil {
 		return nil, fmt.Errorf("runtime bootstrap service is nil")
 	}
 
@@ -62,30 +58,20 @@ func (s *RuntimeBootstrapService) BuildRuntimeValues(
 	}
 
 	schemaStoreKey := keycfg.RuntimeSchemaKey(moduleName)
-
 	runtimeSpecs := buildRuntimeBootstrapSpecs(moduleName, schemaStoreKey)
-	sharedCORSSpecs := buildSharedCORSBootstrapSpecs()
 
 	runtimeLoaded, err := s.loadBySpecs(ctx, s.runtimeRepo, runtimeSpecs, bootstrapSourceRuntime)
 	if err != nil {
 		return nil, err
 	}
-	sharedCorsLoaded, err := s.loadBySpecs(ctx, s.sharedCorsRepo, sharedCORSSpecs, bootstrapSourceSharedCORS)
-	if err != nil {
-		return nil, err
-	}
 
-	values := make(map[string]string, len(runtimeSpecs)+len(sharedCORSSpecs)+1)
+	values := make(map[string]string, len(runtimeSpecs)+7)
 	missing := make([]string, 0)
 	empty := make([]string, 0)
 
 	m1, e1 := applySpecs(runtimeSpecs, runtimeLoaded, values)
 	missing = append(missing, m1...)
 	empty = append(empty, e1...)
-
-	m2, e2 := applySpecs(sharedCORSSpecs, sharedCorsLoaded, values)
-	missing = append(missing, m2...)
-	empty = append(empty, e2...)
 
 	if err := buildBootstrapValidationError(missing, empty); err != nil {
 		return nil, err
@@ -97,6 +83,12 @@ func (s *RuntimeBootstrapService) BuildRuntimeValues(
 	}
 
 	values["app/port"] = strconv.Itoa(int(appPort))
+	values["cors/allow_origins"] = `["https://localhost:80","https://localhost:443"]`
+	values["cors/allow_methods"] = `["GET","POST","PUT","PATCH","DELETE","HEAD","OPTIONS"]`
+	values["cors/allow_headers"] = `["Origin","Content-Type","Accept","Authorization"]`
+	values["cors/expose_headers"] = "[]"
+	values["cors/allow_credentials"] = "true"
+	values["cors/max_age"] = "12h"
 
 	return values, nil
 }
@@ -134,17 +126,6 @@ func buildRuntimeBootstrapSpecs(moduleName string, schemaStoreKey string) []boot
 		})
 	}
 	return specs
-}
-
-func buildSharedCORSBootstrapSpecs() []bootstrapValueSpec {
-	return []bootstrapValueSpec{
-		{Source: bootstrapSourceSharedCORS, StoreKey: keycfg.SharedCORSAllowOrigins, OutputKey: "cors/allow_origins", NonEmpty: true},
-		{Source: bootstrapSourceSharedCORS, StoreKey: keycfg.SharedCORSAllowMethods, OutputKey: "cors/allow_methods", NonEmpty: true},
-		{Source: bootstrapSourceSharedCORS, StoreKey: keycfg.SharedCORSAllowHeaders, OutputKey: "cors/allow_headers", NonEmpty: true},
-		{Source: bootstrapSourceSharedCORS, StoreKey: keycfg.SharedCORSExposeHeader, OutputKey: "cors/expose_headers", NonEmpty: true},
-		{Source: bootstrapSourceSharedCORS, StoreKey: keycfg.SharedCORSAllowCreds, OutputKey: "cors/allow_credentials", NonEmpty: true},
-		{Source: bootstrapSourceSharedCORS, StoreKey: keycfg.SharedCORSMaxAge, OutputKey: "cors/max_age", NonEmpty: true},
-	}
 }
 
 func (s *RuntimeBootstrapService) loadBySpecs(
@@ -209,8 +190,6 @@ func formatBootstrapStoreKey(source bootstrapValueSource, storeKey string) strin
 	switch source {
 	case bootstrapSourceRuntime:
 		return keycfg.RuntimeStoreKey(storeKey)
-	case bootstrapSourceSharedCORS:
-		return keycfg.SharedCORSStoreKey(storeKey)
 	default:
 		return string(source) + "/" + strings.Trim(strings.TrimSpace(storeKey), "/")
 	}
@@ -261,6 +240,9 @@ func (s *RuntimeBootstrapService) resolveModulePort(
 
 	items, err := s.endpointRepo.List(ctx)
 	if err != nil {
+		if fallback := defaultBootstrapAppPort(moduleName); fallback > 0 {
+			return fallback, nil
+		}
 		return pkgutils.RandomAvailableLocalPort()
 	}
 
@@ -284,7 +266,21 @@ func (s *RuntimeBootstrapService) resolveModulePort(
 		return int32(parsed), nil
 	}
 
+	if fallback := defaultBootstrapAppPort(moduleName); fallback > 0 {
+		return fallback, nil
+	}
 	return pkgutils.RandomAvailableLocalPort()
+}
+
+func defaultBootstrapAppPort(moduleName string) int32 {
+	switch normalizeBootstrapModuleName(moduleName) {
+	case "ums":
+		return 3005
+	case "platform":
+		return 8080
+	default:
+		return 0
+	}
 }
 
 func resolveEndpointFromStoredValue(raw string) string {

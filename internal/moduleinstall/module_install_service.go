@@ -3,7 +3,6 @@ package moduleinstall
 import (
 	keycfg "admin/internal/key"
 	"admin/internal/repository"
-	transportrpc "admin/internal/transport/grpc"
 	"admin/pkg/errorvar"
 	"context"
 	"fmt"
@@ -101,11 +100,9 @@ var moduleMigrationSources = map[string]moduleMigrationSource{
 }
 
 type ModuleInstallService struct {
-	endpointRepo   repository.EndpointRepository
-	runtimeRepo    repository.RuntimeConfigRepository
-	sharedCorsRepo repository.RuntimeConfigRepository
-	corsRPCClient  transportrpc.SharedCORSClient
-	databaseURL    string
+	endpointRepo repository.EndpointRepository
+	runtimeRepo  repository.RuntimeConfigRepository
+	databaseURL  string
 
 	umsInstallScriptURL      string
 	platformInstallScriptURL string
@@ -116,7 +113,6 @@ type InstallLogFn func(stage, message string)
 func NewModuleInstallService(
 	endpointRepo repository.EndpointRepository,
 	runtimeRepo repository.RuntimeConfigRepository,
-	sharedCorsRepo repository.RuntimeConfigRepository,
 	databaseURL string,
 	umsInstallScriptURL string,
 	platformInstallScriptURL string,
@@ -124,8 +120,6 @@ func NewModuleInstallService(
 	return &ModuleInstallService{
 		endpointRepo:             endpointRepo,
 		runtimeRepo:              runtimeRepo,
-		sharedCorsRepo:           sharedCorsRepo,
-		corsRPCClient:            transportrpc.NewSharedCORSClient(),
 		databaseURL:              strings.TrimSpace(databaseURL),
 		umsInstallScriptURL:      strings.TrimSpace(umsInstallScriptURL),
 		platformInstallScriptURL: strings.TrimSpace(platformInstallScriptURL),
@@ -133,7 +127,7 @@ func NewModuleInstallService(
 }
 
 func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleInstallRequest, logFn InstallLogFn) (result *ModuleInstallResult, err error) {
-	if s == nil || s.endpointRepo == nil || s.runtimeRepo == nil || s.sharedCorsRepo == nil {
+	if s == nil || s.endpointRepo == nil || s.runtimeRepo == nil {
 		return nil, errorvar.ErrModuleInstallServiceNil
 	}
 
@@ -305,11 +299,6 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 	result.HealthcheckPassed = true
 	logInstall(logFn, "healthcheck", "healthcheck passed")
 
-	if err := s.upsertSharedCorsAllowOrigins(ctx, appHost, endpoint, logFn); err != nil {
-		logInstall(logFn, "cors", "[error] %v", err)
-		return nil, err
-	}
-
 	targets, err := s.resolveHostSyncTargets(ctx, target)
 	if err != nil {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("cannot load existing endpoint targets: %v", err))
@@ -334,9 +323,6 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 	for _, warning := range warnings {
 		logInstall(logFn, "hosts", "[warn] %s", warning)
 	}
-
-	corsRPCWarnings := s.pushSharedCORSToInstalledServices(ctx, logFn)
-	result.Warnings = append(result.Warnings, corsRPCWarnings...)
 
 	logInstall(logFn, "install", "[done] module install completed module=%s", moduleName)
 	rollbackSchemaName = ""

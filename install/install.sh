@@ -306,9 +306,7 @@ upsert_env_value() {
 assign_random_backend_port() {
   BACKEND_PORT="$(random_backend_port)"
   upsert_env_value "$ENV_FILE" "APP_PORT" "$BACKEND_PORT"
-  upsert_env_value "$ENV_FILE" "APP_ENDPOINT_PORT" "443"
   log "assigned random backend APP_PORT=${BACKEND_PORT}"
-  log "set public endpoint APP_ENDPOINT_PORT=443"
 }
 
 write_config_template() {
@@ -319,7 +317,6 @@ write_config_template() {
 
 APP_HOSTNAME=aurora-admin.local
 APP_PORT=3009
-APP_ENDPOINT_PORT=443
 APP_LOG_LEVEL=info
 APP_TIMEZONE=Asia/Ho_Chi_Minh
 

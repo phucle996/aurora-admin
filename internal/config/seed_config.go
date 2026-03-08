@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -82,25 +81,7 @@ func SeedRuntimeToEtcdIfAbsent(ctx context.Context, cli *clientv3.Client, cfg *C
 		return fmt.Errorf("seed runtime config failed: %w", err)
 	}
 
-	advertisePort := normalizeAdvertisePort(cfg.App.EndpointPort, cfg.App.Port)
-
-	allowOrigins := append([]string{}, cfg.Cors.AllowOrigins...)
-	if appOrigin := buildOriginFromHostPort(cfg.App.HostName, advertisePort); appOrigin != "" {
-		allowOrigins = appendUniqueString(allowOrigins, appOrigin)
-	}
-
-	corsValues := map[string]string{
-		keycfg.SharedCORSAllowOrigins: encodeStringSlice(allowOrigins),
-		keycfg.SharedCORSAllowMethods: encodeStringSlice(cfg.Cors.AllowMethods),
-		keycfg.SharedCORSAllowHeaders: encodeStringSlice(cfg.Cors.AllowHeaders),
-		keycfg.SharedCORSExposeHeader: encodeStringSlice(cfg.Cors.ExposeHeaders),
-		keycfg.SharedCORSAllowCreds:   strconv.FormatBool(cfg.Cors.AllowCredentials),
-		keycfg.SharedCORSMaxAge:       cfg.Cors.MaxAge.String(),
-	}
-	if err := seedValuesIfAbsent(ctx, cli, corsValues); err != nil {
-		return fmt.Errorf("seed shared cors config failed: %w", err)
-	}
-	if endpoint := buildEndpointFromHostPort(cfg.App.HostName, advertisePort); endpoint != "" {
+	if endpoint := buildEndpointFromHost(cfg.App.HostName); endpoint != "" {
 		if err := upsertValue(ctx, cli, keycfg.EndpointAdminKey, "running:"+endpoint); err != nil {
 			return fmt.Errorf("upsert admin endpoint failed: %w", err)
 		}
@@ -168,46 +149,12 @@ func encodeStringSlice(items []string) string {
 	return string(payload)
 }
 
-func appendUniqueString(existing []string, value string) []string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return existing
-	}
-	for _, item := range existing {
-		if strings.EqualFold(strings.TrimSpace(item), value) {
-			return existing
-		}
-	}
-	return append(existing, value)
-}
-
-func buildOriginFromHostPort(rawHost string, port int) string {
+func buildEndpointFromHost(rawHost string) string {
 	host := normalizeHost(rawHost)
 	if host == "" {
 		return ""
 	}
-	scheme := "http"
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(rawHost)), "https://") {
-		scheme = "https"
-	}
-	if port == 443 {
-		scheme = "https"
-	}
-	if port <= 0 || port > 65535 {
-		return ""
-	}
-	if (scheme == "http" && port == 80) || (scheme == "https" && port == 443) {
-		return scheme + "://" + host
-	}
-	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(port))
-}
-
-func buildEndpointFromHostPort(rawHost string, port int) string {
-	host := normalizeHost(rawHost)
-	if host == "" || port <= 0 || port > 65535 {
-		return ""
-	}
-	return net.JoinHostPort(host, strconv.Itoa(port))
+	return host
 }
 
 func normalizeHost(rawHost string) string {
@@ -223,16 +170,6 @@ func normalizeHost(rawHost string) string {
 	}
 	host = strings.Trim(host, "[]")
 	return host
-}
-
-func normalizeAdvertisePort(advertisePort int, appPort int) int {
-	if advertisePort > 0 && advertisePort <= 65535 {
-		return advertisePort
-	}
-	if appPort > 0 && appPort <= 65535 {
-		return appPort
-	}
-	return 0
 }
 
 func randomBase64Key(size int) (string, error) {
