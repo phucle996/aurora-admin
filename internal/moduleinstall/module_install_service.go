@@ -5,6 +5,7 @@ import (
 	"admin/internal/repository"
 	"admin/pkg/errorvar"
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -69,33 +70,9 @@ type hostsEntry struct {
 	Host    string
 }
 
-type moduleMigrationSource struct {
-	DownloadURLs []string
-	LegacySchema string
-}
-
-var moduleMigrationSources = map[string]moduleMigrationSource{
-	"vm": {
-		DownloadURLs: []string{
-			"https://codeload.github.com/phucle996/aurora-vm-service/zip/refs/heads/main",
-		},
-	},
-	"ums": {
-		DownloadURLs: []string{
-			"https://codeload.github.com/phucle996/aurora-ums/zip/refs/heads/main",
-		},
-		LegacySchema: "ums",
-	},
-	"mail": {
-		DownloadURLs: []string{
-			"https://codeload.github.com/phucle996/aurora-mail-service/zip/refs/heads/main",
-		},
-	},
-	"platform": {
-		DownloadURLs: []string{
-			"https://codeload.github.com/phucle996/aurora-platform-resource/zip/refs/heads/main",
-		},
-	},
+type endpointListSnapshot struct {
+	items []repository.EndpointKV
+	err   error
 }
 
 type ModuleInstallService struct {
@@ -105,6 +82,9 @@ type ModuleInstallService struct {
 
 	umsInstallScriptURL      string
 	platformInstallScriptURL string
+	paasInstallScriptURL     string
+	dbaasInstallScriptURL    string
+	uiInstallScriptURL       string
 }
 
 type InstallLogFn func(stage, message string)
@@ -115,6 +95,9 @@ func NewModuleInstallService(
 	databaseURL string,
 	umsInstallScriptURL string,
 	platformInstallScriptURL string,
+	paasInstallScriptURL string,
+	dbaasInstallScriptURL string,
+	uiInstallScriptURL string,
 ) *ModuleInstallService {
 	return &ModuleInstallService{
 		endpointRepo:             endpointRepo,
@@ -122,6 +105,9 @@ func NewModuleInstallService(
 		databaseURL:              strings.TrimSpace(databaseURL),
 		umsInstallScriptURL:      strings.TrimSpace(umsInstallScriptURL),
 		platformInstallScriptURL: strings.TrimSpace(platformInstallScriptURL),
+		paasInstallScriptURL:     strings.TrimSpace(paasInstallScriptURL),
+		dbaasInstallScriptURL:    strings.TrimSpace(dbaasInstallScriptURL),
+		uiInstallScriptURL:       strings.TrimSpace(uiInstallScriptURL),
 	}
 }
 
@@ -158,6 +144,10 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 	}
 	logInstall(logFn, "install", "start module=%s scope=%s app_host=%s app_port=%d endpoint=%s", moduleName, scope, appHost, endpointPort, endpoint)
 	logInstall(logFn, "target", "target host=%s port=%d user=%s", target.Host, target.Port, target.Username)
+	if preflightErr := ensureTargetInstallPrivilege(ctx, target, logFn); preflightErr != nil {
+		logInstall(logFn, "preflight", "[error] %v", preflightErr)
+		return nil, preflightErr
+	}
 
 	result = &ModuleInstallResult{
 		ModuleName: moduleName,
@@ -165,83 +155,54 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 		Endpoint:   endpoint,
 	}
 
-	rollbackSchemaName := ""
-	endpointUpserted := false
+	rollbacks := newRollbackStack(logFn)
 	defer func() {
 		if err == nil {
 			return
 		}
-		if strings.TrimSpace(rollbackSchemaName) != "" {
-			logInstall(logFn, "rollback", "rollback schema start schema=%s", rollbackSchemaName)
-			rollbackCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			dropErr := dropSchemaWithSQL(rollbackCtx, s.databaseURL, rollbackSchemaName)
-			cancel()
-			if dropErr != nil {
-				logInstall(logFn, "rollback", "[error] rollback schema failed schema=%s", rollbackSchemaName)
-				err = fmt.Errorf("%w; rollback schema %s failed: %v", err, rollbackSchemaName, dropErr)
-			} else {
-				logInstall(logFn, "rollback", "rollback schema completed schema=%s", rollbackSchemaName)
-			}
-
-			schemaKey := strings.TrimSpace(result.SchemaKey)
-			if schemaKey != "" && s.runtimeRepo != nil {
-				cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				deleteErr := s.runtimeRepo.Delete(cleanupCtx, schemaKey)
-				cancel()
-				if deleteErr != nil {
-					logInstall(logFn, "rollback", "[warn] rollback schema key cleanup failed key=%s err=%v", schemaKey, deleteErr)
-					err = fmt.Errorf("%w; schema key cleanup failed (%s): %v", err, schemaKey, deleteErr)
-					return
-				}
-				logInstall(logFn, "rollback", "schema key cleanup completed key=%s", schemaKey)
-			}
-		}
-		if endpointUpserted && s.endpointRepo != nil {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			deleteErr := s.endpointRepo.Delete(cleanupCtx, moduleName)
-			cancel()
-			if deleteErr != nil {
-				logInstall(logFn, "rollback", "[warn] endpoint cleanup failed key=%s err=%v", keycfg.EndpointKey(moduleName), deleteErr)
-				err = fmt.Errorf("%w; endpoint cleanup failed (%s): %v", err, moduleName, deleteErr)
-				return
-			}
-			logInstall(logFn, "rollback", "endpoint cleanup completed key=%s", keycfg.EndpointKey(moduleName))
+		rollbackCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if rollbackErr := rollbacks.Run(rollbackCtx); rollbackErr != nil {
+			err = errors.Join(err, rollbackErr)
 		}
 	}()
 
-	if err := s.prepareSchemaAndMigrate(ctx, moduleName, result, logFn); err != nil {
-		rollbackSchemaName = strings.TrimSpace(result.SchemaName)
-		logInstall(logFn, "migration", "[error] %v", err)
-		return nil, err
+	if prepErr := s.prepareSchemaAndMigrate(ctx, moduleName, result, logFn); prepErr != nil {
+		s.addSchemaRollbackStep(rollbacks, result)
+		logInstall(logFn, "migration", "[error] %v", prepErr)
+		return nil, prepErr
 	}
-	rollbackSchemaName = strings.TrimSpace(result.SchemaName)
-	if rollbackSchemaName != "" {
-		logInstall(logFn, "migration", "schema prepared key=%s schema=%s", result.SchemaKey, rollbackSchemaName)
+	s.addSchemaRollbackStep(rollbacks, result)
+	if schemaName := strings.TrimSpace(result.SchemaName); schemaName != "" {
+		logInstall(logFn, "migration", "schema prepared key=%s schema=%s", result.SchemaKey, schemaName)
 	}
+	endpoints := s.loadEndpointListSnapshot(ctx)
 
 	adminRPCEndpoint := ""
-	if moduleName == "platform" {
-		adminRPCEndpoint, err = s.resolveAdminBootstrapEndpoint(ctx)
+	if moduleRequiresAdminRPC(moduleName) {
+		adminRPCEndpoint, err = s.resolveAdminBootstrapEndpoint(endpoints.items, endpoints.err)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	command := buildDefaultModuleInstallCommand(
-		moduleName,
-		result.SchemaName,
-		appHost,
-		endpoint,
-		s.databaseURL,
-		adminRPCEndpoint,
-		s.umsInstallScriptURL,
-		s.platformInstallScriptURL,
-	)
+	command := ""
 	if scope == ModuleInstallScopeRemote && strings.TrimSpace(req.InstallCommand) != "" {
 		command = strings.TrimSpace(req.InstallCommand)
 		logInstall(logFn, "install", "using custom install command for remote target")
-	} else if command != "" {
-		logInstall(logFn, "install", "resolved default install command for module=%s", moduleName)
+	} else {
+		uiEnvPath := ""
+		if moduleName == "ui" {
+			envRemotePath, envErr := s.generateAndPushUIEnv(ctx, target, endpoints.items, endpoints.err, logFn)
+			if envErr != nil {
+				return nil, envErr
+			}
+			uiEnvPath = envRemotePath
+		}
+		command = s.buildDefaultInstallCommand(moduleName, appHost, endpointPort, adminRPCEndpoint, uiEnvPath)
+		if command != "" {
+			logInstall(logFn, "install", "resolved default install command for module=%s", moduleName)
+		}
 	}
 	if command == "" {
 		return nil, errorvar.ErrModuleInstallerMissing
@@ -252,7 +213,7 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 		return nil, fmt.Errorf("install tls materials failed: %w", tlsErr)
 	}
 
-	if adminHostEntry, ok := s.resolveAdminHostsEntry(ctx); ok {
+	if adminHostEntry, ok := s.resolveAdminHostsEntry(endpoints.items, endpoints.err); ok {
 		logInstall(logFn, "hosts", "pre-sync admin host %s -> %s", adminHostEntry.Host, adminHostEntry.Address)
 		_, warnings := syncHostsForTargets(ctx, []hostsEntry{adminHostEntry}, []moduleInstallTarget{target})
 		for _, warning := range warnings {
@@ -267,7 +228,18 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 		logInstall(logFn, "endpoint", "[error] %v", err)
 		return nil, err
 	}
-	endpointUpserted = true
+	rollbacks.Add("endpoint", func(rollbackCtx context.Context) error {
+		if s.endpointRepo == nil {
+			return nil
+		}
+		cleanupCtx, cancel := context.WithTimeout(rollbackCtx, 10*time.Second)
+		deleteErr := s.endpointRepo.Delete(cleanupCtx, moduleName)
+		cancel()
+		if deleteErr != nil {
+			return fmt.Errorf("endpoint cleanup failed (%s): %w", moduleName, deleteErr)
+		}
+		return nil
+	})
 	logInstall(logFn, "endpoint", "endpoint updated")
 
 	logInstall(logFn, "install", "running install command")
@@ -277,9 +249,12 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 	result.InstallExecuted = true
 	result.InstallOutput = strings.TrimSpace(output)
 	result.InstallExitCode = exitCode
-	if installErr != nil {
+	if installErr != nil || exitCode != 0 {
 		logInstall(logFn, "install", "[error] install command failed exit_code=%d", exitCode)
-		return nil, fmt.Errorf("install command failed: %w", installErr)
+		if installErr != nil {
+			return nil, fmt.Errorf("install command failed: %w", installErr)
+		}
+		return nil, fmt.Errorf("install command failed: exit_code=%d", exitCode)
 	}
 	logInstall(logFn, "install", "install command completed exit_code=%d", exitCode)
 
@@ -298,14 +273,14 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 	result.HealthcheckPassed = true
 	logInstall(logFn, "healthcheck", "healthcheck passed")
 
-	targets, err := s.resolveHostSyncTargets(ctx, target)
+	targets, err := s.resolveHostSyncTargets(target, endpoints.items, endpoints.err)
 	if err != nil {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("cannot load existing endpoint targets: %v", err))
 		targets = []moduleInstallTarget{target}
 		logInstall(logFn, "hosts", "[warn] cannot load existing endpoint targets: %v", err)
 	}
 
-	hostEntries, entryErr := s.buildHostsEntries(ctx, appHost, target.Host)
+	hostEntries, entryErr := s.buildHostsEntries(appHost, target.Host, endpoints.items, endpoints.err)
 	if entryErr != nil {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("cannot build hosts entries: %v", entryErr))
 		hostEntries = []hostsEntry{{Address: normalizeAddress(target.Host), Host: strings.TrimSpace(appHost)}}
@@ -324,8 +299,84 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 	}
 
 	logInstall(logFn, "install", "[done] module install completed module=%s", moduleName)
-	rollbackSchemaName = ""
+	rollbacks.Clear()
 	return result, nil
+}
+
+func (s *ModuleInstallService) buildDefaultInstallCommand(
+	moduleName string,
+	appHost string,
+	appPort int32,
+	adminRPCEndpoint string,
+	uiEnvPath string,
+) string {
+	scriptURL := s.installScriptURL(moduleName)
+	return buildDefaultModuleInstallCommand(
+		moduleName,
+		scriptURL,
+		appHost,
+		appPort,
+		adminRPCEndpoint,
+		uiEnvPath,
+	)
+}
+
+func (s *ModuleInstallService) loadEndpointListSnapshot(ctx context.Context) endpointListSnapshot {
+	if s == nil || s.endpointRepo == nil {
+		return endpointListSnapshot{err: fmt.Errorf("module install service is nil")}
+	}
+	items, err := s.endpointRepo.List(ctx)
+	return endpointListSnapshot{
+		items: items,
+		err:   err,
+	}
+}
+
+func (s *ModuleInstallService) addSchemaRollbackStep(stack *rollbackStack, result *ModuleInstallResult) {
+	if stack == nil || result == nil {
+		return
+	}
+	schemaName := strings.TrimSpace(result.SchemaName)
+	if schemaName == "" {
+		return
+	}
+	schemaKey := strings.TrimSpace(result.SchemaKey)
+	stack.Add("schema", func(rollbackCtx context.Context) error {
+		dropCtx, cancel := context.WithTimeout(rollbackCtx, 30*time.Second)
+		dropErr := dropSchemaWithSQL(dropCtx, s.databaseURL, schemaName)
+		cancel()
+		if dropErr != nil {
+			return fmt.Errorf("rollback schema %s failed: %w", schemaName, dropErr)
+		}
+		if schemaKey == "" || s.runtimeRepo == nil {
+			return nil
+		}
+
+		cleanupCtx, cleanupCancel := context.WithTimeout(rollbackCtx, 10*time.Second)
+		deleteErr := s.runtimeRepo.Delete(cleanupCtx, schemaKey)
+		cleanupCancel()
+		if deleteErr != nil {
+			return fmt.Errorf("schema key cleanup failed (%s): %w", schemaKey, deleteErr)
+		}
+		return nil
+	})
+}
+
+func (s *ModuleInstallService) installScriptURL(moduleName string) string {
+	switch canonicalModuleName(moduleName) {
+	case "ums":
+		return strings.TrimSpace(s.umsInstallScriptURL)
+	case "platform":
+		return strings.TrimSpace(s.platformInstallScriptURL)
+	case "paas":
+		return strings.TrimSpace(s.paasInstallScriptURL)
+	case "dbaas":
+		return strings.TrimSpace(s.dbaasInstallScriptURL)
+	case "ui":
+		return strings.TrimSpace(s.uiInstallScriptURL)
+	default:
+		return ""
+	}
 }
 
 func (s *ModuleInstallService) prepareSchemaAndMigrate(
@@ -334,7 +385,7 @@ func (s *ModuleInstallService) prepareSchemaAndMigrate(
 	result *ModuleInstallResult,
 	logFn InstallLogFn,
 ) (err error) {
-	source, ok := moduleMigrationSources[moduleName]
+	source, ok := moduleMigrationSourceFor(moduleName)
 	if !ok {
 		logInstall(logFn, "migration", "skip migrations for module=%s (no source)", moduleName)
 		return nil

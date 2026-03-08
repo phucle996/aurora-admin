@@ -1,6 +1,7 @@
 package moduleinstall
 
 import (
+	"admin/internal/repository"
 	sshpkg "admin/pkg/ssh"
 	"context"
 	"fmt"
@@ -11,10 +12,9 @@ import (
 	"time"
 )
 
-func (s *ModuleInstallService) resolveHostSyncTargets(ctx context.Context, current moduleInstallTarget) ([]moduleInstallTarget, error) {
-	items, err := s.endpointRepo.List(ctx)
-	if err != nil {
-		return nil, err
+func (s *ModuleInstallService) resolveHostSyncTargets(current moduleInstallTarget, items []repository.EndpointKV, listErr error) ([]moduleInstallTarget, error) {
+	if listErr != nil {
+		return nil, listErr
 	}
 
 	out := make([]moduleInstallTarget, 0, len(items)+2)
@@ -37,9 +37,10 @@ func (s *ModuleInstallService) resolveHostSyncTargets(ctx context.Context, curre
 }
 
 func (s *ModuleInstallService) buildHostsEntries(
-	ctx context.Context,
 	currentHost string,
 	currentAddress string,
+	items []repository.EndpointKV,
+	listErr error,
 ) ([]hostsEntry, error) {
 	entries := map[string]string{}
 	adminAddress := detectLocalIPv4()
@@ -52,9 +53,8 @@ func (s *ModuleInstallService) buildHostsEntries(
 		entries[normalizedCurrentHost] = normalizedCurrentAddress
 	}
 
-	items, err := s.endpointRepo.List(ctx)
-	if err != nil {
-		return mapToHostsEntries(entries), err
+	if listErr != nil {
+		return mapToHostsEntries(entries), listErr
 	}
 
 	for _, item := range items {
@@ -88,7 +88,7 @@ func (s *ModuleInstallService) buildHostsEntries(
 	return mapToHostsEntries(entries), nil
 }
 
-func (s *ModuleInstallService) resolveAdminHostsEntry(ctx context.Context) (hostsEntry, bool) {
+func (s *ModuleInstallService) resolveAdminHostsEntry(items []repository.EndpointKV, listErr error) (hostsEntry, bool) {
 	if s == nil || s.endpointRepo == nil {
 		return hostsEntry{}, false
 	}
@@ -96,9 +96,7 @@ func (s *ModuleInstallService) resolveAdminHostsEntry(ctx context.Context) (host
 	if adminAddress == "" {
 		return hostsEntry{}, false
 	}
-
-	items, err := s.endpointRepo.List(ctx)
-	if err != nil {
+	if listErr != nil {
 		return hostsEntry{}, false
 	}
 	for _, item := range items {

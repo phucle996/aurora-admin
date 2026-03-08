@@ -13,6 +13,8 @@ export const DEFAULT_MODULE_PORT: Record<string, number> = {
   gateway: 443,
   monitoring: 8428,
   platform: 8080,
+  paas: 8081,
+  dbaas: 8082,
 };
 
 const moduleCatalog: ModuleCatalogItem[] = [
@@ -71,6 +73,20 @@ const moduleCatalog: ModuleCatalogItem[] = [
     description: "Quan ly cluster Kubernetes, placement va workload orchestration.",
     icon: Layers,
     aliases: ["platform", "platform-resource"],
+  },
+  {
+    id: "paas",
+    label: "PaaS Service",
+    description: "Build, release va deploy ung dung thong qua Platform Resource.",
+    icon: Layers,
+    aliases: ["paas", "paas-service"],
+  },
+  {
+    id: "dbaas",
+    label: "DBaaS Service",
+    description: "Provision database lifecycle va ket noi runtime qua Platform Resource.",
+    icon: Layers,
+    aliases: ["dbaas", "dbaas-service", "dbaas-module"],
   },
 ];
 

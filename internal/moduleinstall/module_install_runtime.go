@@ -346,19 +346,10 @@ func normalizeScope(raw string) string {
 
 func normalizeModuleName(raw string) string {
 	value := strings.ToLower(strings.TrimSpace(raw))
+	value = strings.Trim(value, "/")
 	value = strings.ReplaceAll(value, " ", "-")
 	value = strings.ReplaceAll(value, "_", "-")
 	return value
-}
-
-func canonicalModuleName(raw string) string {
-	name := normalizeModuleName(raw)
-	switch name {
-	case "platform", "platform-resource", "platform_resource", "plaform-resource", "plaform_resource":
-		return "platform"
-	default:
-		return name
-	}
 }
 
 func resolveInstallEndpoint(scope string, appHost string, appPort int32, fallbackEndpoint string) (string, int32, error) {
@@ -452,39 +443,47 @@ func isLocalTCPPortAvailable(port int32) bool {
 }
 
 func buildDefaultModuleInstallCommand(
-	moduleName,
-	schemaName,
-	appHost,
-	endpoint,
-	databaseURL,
-	adminRPCEndpoint,
-	umsInstallScriptURL,
-	platformInstallScriptURL string,
+	moduleName string,
+	scriptURL string,
+	appHost string,
+	appPort int32,
+	adminRPCEndpoint string,
+	uiEnvPath string,
 ) string {
-	scriptURL := ""
 	args := []string{}
-
-	_ = schemaName
-	_ = appHost
-	_ = endpoint
-	_ = databaseURL
 
 	switch canonicalModuleName(moduleName) {
 	case "ums":
-		scriptURL = strings.TrimSpace(umsInstallScriptURL)
-		if scriptURL == "" {
-			return ""
-		}
+		// no extra args
 	case "platform":
-		scriptURL = strings.TrimSpace(platformInstallScriptURL)
-		if scriptURL == "" {
-			return ""
-		}
 		if strings.TrimSpace(adminRPCEndpoint) == "" {
 			return ""
 		}
 		args = append(args, "--admin-rpc-endpoint", strings.TrimSpace(adminRPCEndpoint))
+	case "paas":
+		if strings.TrimSpace(adminRPCEndpoint) == "" {
+			return ""
+		}
+		args = append(args, "--admin-rpc-endpoint", strings.TrimSpace(adminRPCEndpoint))
+	case "dbaas":
+		if strings.TrimSpace(adminRPCEndpoint) == "" {
+			return ""
+		}
+		args = append(args, "--admin-rpc-endpoint", strings.TrimSpace(adminRPCEndpoint))
+	case "ui":
+		if strings.TrimSpace(appHost) == "" || appPort <= 0 {
+			return ""
+		}
+		if strings.TrimSpace(uiEnvPath) != "" {
+			args = append(args, "--env-file", strings.TrimSpace(uiEnvPath))
+		}
+		args = append(args, "--app-host", strings.TrimSpace(appHost))
+		args = append(args, "--app-port", strconv.Itoa(int(appPort)))
 	default:
+		return ""
+	}
+	scriptURL = strings.TrimSpace(scriptURL)
+	if scriptURL == "" {
 		return ""
 	}
 

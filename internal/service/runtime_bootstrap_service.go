@@ -6,6 +6,8 @@ import (
 	pkgutils "admin/pkg/utils"
 	"context"
 	"fmt"
+	"net"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,6 +34,12 @@ type bootstrapValueSpec struct {
 	StoreKey  string
 	OutputKey string
 	NonEmpty  bool
+}
+
+type endpointRuntimeDependency struct {
+	TargetModule  string
+	BaseURLOutput string
+	GRPCOutput    string
 }
 
 func NewRuntimeBootstrapService(
@@ -83,6 +91,14 @@ func (s *RuntimeBootstrapService) BuildRuntimeValues(
 	}
 
 	values["app/port"] = strconv.Itoa(int(appPort))
+	for _, dep := range runtimeEndpointDependencies(moduleName) {
+		baseURL, resolveErr := s.resolveModuleBaseURL(ctx, dep.TargetModule)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		values[dep.BaseURLOutput] = baseURL
+		values[dep.GRPCOutput] = toGRPCEndpoint(baseURL)
+	}
 	values["cors/allow_origins"] = `["https://localhost:80","https://localhost:443"]`
 	values["cors/allow_methods"] = `["GET","POST","PUT","PATCH","DELETE","HEAD","OPTIONS"]`
 	values["cors/allow_headers"] = `["Origin","Content-Type","Accept","Authorization"]`
@@ -217,6 +233,12 @@ func normalizeBootstrapModuleName(raw string) string {
 	switch name {
 	case "platform", "platform-resource", "platform_resource", "plaform-resource", "plaform_resource":
 		return "platform"
+	case "paas", "paas-service", "paas_service":
+		return "paas"
+	case "dbaas", "dbaas-service", "dbaas_service":
+		return "dbaas"
+	case "dbaas-module", "dbaas_module":
+		return "dbaas"
 	default:
 		return name
 	}
@@ -224,6 +246,21 @@ func normalizeBootstrapModuleName(raw string) string {
 
 func isPlatformModuleName(name string) bool {
 	return normalizeBootstrapModuleName(name) == "platform"
+}
+
+func runtimeEndpointDependencies(moduleName string) []endpointRuntimeDependency {
+	switch normalizeBootstrapModuleName(moduleName) {
+	case "paas", "dbaas":
+		return []endpointRuntimeDependency{
+			{
+				TargetModule:  "platform",
+				BaseURLOutput: "platform/base_url",
+				GRPCOutput:    "platform/grpc_endpoint",
+			},
+		}
+	default:
+		return nil
+	}
 }
 
 func (s *RuntimeBootstrapService) resolveModulePort(
@@ -291,4 +328,60 @@ func resolveEndpointFromStoredValue(raw string) string {
 		return strings.TrimSpace(endpoint)
 	}
 	return ""
+}
+
+func (s *RuntimeBootstrapService) resolveModuleBaseURL(ctx context.Context, moduleName string) (string, error) {
+	targetName := normalizeBootstrapModuleName(moduleName)
+	if targetName == "" {
+		return "", fmt.Errorf("target module is required")
+	}
+	items, err := s.endpointRepo.List(ctx)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s endpoint failed: %w", targetName, err)
+	}
+	for _, item := range items {
+		if normalizeBootstrapModuleName(item.Name) != targetName {
+			continue
+		}
+		endpoint := strings.TrimSpace(resolveEndpointFromStoredValue(item.Value))
+		if endpoint == "" {
+			continue
+		}
+		if strings.HasPrefix(endpoint, "https://") || strings.HasPrefix(endpoint, "http://") {
+			return strings.TrimRight(endpoint, "/"), nil
+		}
+		return "https://" + strings.TrimRight(endpoint, "/"), nil
+	}
+	return "", fmt.Errorf("%s endpoint not found", targetName)
+}
+
+func toGRPCEndpoint(baseURL string) string {
+	raw := strings.TrimSpace(baseURL)
+	if raw == "" {
+		return ""
+	}
+	if strings.Contains(raw, "://") {
+		parsed, err := url.Parse(raw)
+		if err == nil {
+			host := strings.TrimSpace(parsed.Host)
+			if host == "" {
+				return ""
+			}
+			if _, _, splitErr := net.SplitHostPort(host); splitErr == nil {
+				return host
+			}
+			if strings.EqualFold(parsed.Scheme, "http") {
+				return net.JoinHostPort(host, "80")
+			}
+			return net.JoinHostPort(host, "443")
+		}
+	}
+	host := strings.Trim(raw, "/")
+	if host == "" {
+		return ""
+	}
+	if _, _, splitErr := net.SplitHostPort(host); splitErr == nil {
+		return host
+	}
+	return net.JoinHostPort(host, "443")
 }

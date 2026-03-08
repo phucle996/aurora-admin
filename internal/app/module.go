@@ -121,6 +121,9 @@ func NewModules(
 		cfg.Database.URL,
 		cfg.ModuleInstall.UMSInstallScriptURL,
 		cfg.ModuleInstall.PlatformInstallScriptURL,
+		cfg.ModuleInstall.PaaSInstallScriptURL,
+		cfg.ModuleInstall.DBaaSInstallScriptURL,
+		cfg.ModuleInstall.UIInstallScriptURL,
 	)
 	runtimeSvc := apisvc.NewRuntimeBootstrapService(runtimeRepo, enabledModuleRepo)
 

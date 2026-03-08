@@ -33,6 +33,9 @@ var runtimeModuleDefinitions = []moduleDefinition{
 	{Name: "gateway", Aliases: []string{"gateway", "nginx", "proxy"}},
 	{Name: "monitoring", Aliases: []string{"monitoring", "monitor", "metrics", "victoria", "prometheus"}},
 	{Name: "platform", Aliases: []string{"platform", "platform-resource"}},
+	{Name: "paas", Aliases: []string{"paas", "paas-service"}},
+	{Name: "dbaas", Aliases: []string{"dbaas", "dbaas-service", "dbaas-module"}},
+	{Name: "ui", Aliases: []string{"ui", "aurora-ui", "frontend", "web"}},
 }
 
 func NewEnabledModuleService(repo repository.EndpointRepository) *EnabledModuleService {

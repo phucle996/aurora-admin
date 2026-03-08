@@ -1,20 +1,18 @@
 package moduleinstall
 
 import (
-	"context"
+	"admin/internal/repository"
 	"fmt"
 	"net"
 	"strings"
 )
 
-func (s *ModuleInstallService) resolveAdminBootstrapEndpoint(ctx context.Context) (string, error) {
+func (s *ModuleInstallService) resolveAdminBootstrapEndpoint(items []repository.EndpointKV, listErr error) (string, error) {
 	if s == nil || s.endpointRepo == nil {
 		return "", fmt.Errorf("module install service is nil")
 	}
-
-	items, err := s.endpointRepo.List(ctx)
-	if err != nil {
-		return "", fmt.Errorf("load admin endpoint failed: %w", err)
+	if listErr != nil {
+		return "", fmt.Errorf("load admin endpoint failed: %w", listErr)
 	}
 	for _, item := range items {
 		name := canonicalModuleName(strings.Trim(item.Name, "/"))

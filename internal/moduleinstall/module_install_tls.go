@@ -78,7 +78,13 @@ func installModuleTLSOnTarget(
 	ownerGroup := "aurora"
 	script := strings.Join([]string{
 		"set -e",
-		`ensure_root(){ if [ "$(id -u)" -eq 0 ]; then "$@"; return; fi; if command -v sudo >/dev/null 2>&1; then sudo "$@"; return; fi; echo "need root or sudo" >&2; exit 1; }`,
+		`ensure_root(){`,
+		`  if [ "$(id -u)" -eq 0 ]; then "$@"; return; fi`,
+		`  if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then sudo -n "$@"; return; fi`,
+		`  if "$@" >/dev/null 2>&1; then return; fi`,
+		`  echo "need root or passwordless sudo to write tls files under /etc/aurora/certs" >&2`,
+		`  exit 1`,
+		`}`,
 		`if ! id -u ` + shellEscape(ownerUser) + ` >/dev/null 2>&1; then owner_user="root"; owner_group="root"; else owner_user=` + shellEscape(ownerUser) + `; owner_group="$(id -gn ` + ownerUser + ` 2>/dev/null || echo ` + ownerGroup + `)"; fi`,
 		"write_file(){",
 		`  path="$1"`,
