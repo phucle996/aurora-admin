@@ -430,7 +430,7 @@ func buildDefaultModuleInstallCommand(
 
 	switch canonicalModuleName(moduleName) {
 	case "ums":
-		// no extra args
+		args = append(args, "-r", "phucle996/aurora-ums")
 	case "platform":
 		if strings.TrimSpace(adminRPCEndpoint) == "" {
 			return ""
