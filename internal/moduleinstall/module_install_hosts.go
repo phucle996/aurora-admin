@@ -4,6 +4,7 @@ import (
 	"admin/internal/repository"
 	sshpkg "admin/pkg/ssh"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os/exec"
 	"sort"
@@ -174,7 +175,7 @@ func syncHostsForTargets(
 				continue
 			}
 			for _, entry := range entries {
-				cmd := buildHostsUpdateCommand(entry.Address, entry.Host)
+				cmd := buildHostsUpdateCommand(entry.Address, entry.Host, target.Password)
 				runCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 				_, err := sshpkg.Run(runCtx, sshpkg.RunInput{
 					Host:               target.Host,
@@ -203,7 +204,7 @@ func syncHostsForTargets(
 }
 
 func upsertLocalHosts(address, host string) error {
-	script := buildHostsUpdateScript(address, host)
+	script := buildHostsUpdateScript(address, host, nil)
 	cmd := exec.Command("bash", "-lc", script)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -212,13 +213,18 @@ func upsertLocalHosts(address, host string) error {
 	return nil
 }
 
-func buildHostsUpdateCommand(address, host string) string {
-	return "bash -lc " + strconv.Quote(buildHostsUpdateScript(address, host))
+func buildHostsUpdateCommand(address, host string, sudoPassword *string) string {
+	return "bash -lc " + strconv.Quote(buildHostsUpdateScript(address, host, sudoPassword))
 }
 
-func buildHostsUpdateScript(address, host string) string {
+func buildHostsUpdateScript(address, host string, sudoPassword *string) string {
+	sudoPasswordB64 := ""
+	if sudoPassword != nil {
+		sudoPasswordB64 = base64.StdEncoding.EncodeToString([]byte(*sudoPassword))
+	}
 	return fmt.Sprintf(
-		`tmp="$(mktemp)"; grep -v -E "(^|[[:space:]])%s([[:space:]]|$)" /etc/hosts > "$tmp" || true; printf "%%s %%s\n" %s %s >> "$tmp"; if [ "$(id -u)" -eq 0 ]; then cat "$tmp" > /etc/hosts; else sudo sh -c "cat \"$tmp\" > /etc/hosts"; fi; rm -f "$tmp"`,
+		`set -e; sudo_pw_b64=%s; sudo_pw=""; if [ -n "$sudo_pw_b64" ]; then sudo_pw="$(printf '%%s' "$sudo_pw_b64" | base64 -d 2>/dev/null || true)"; fi; tmp="$(mktemp)"; grep -v -E "(^|[[:space:]])%s([[:space:]]|$)" /etc/hosts > "$tmp" || true; printf "%%s %%s\n" %s %s >> "$tmp"; if [ "$(id -u)" -eq 0 ]; then cat "$tmp" > /etc/hosts; rm -f "$tmp"; exit 0; fi; if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then sudo -n sh -c "cat \"$tmp\" > /etc/hosts"; rm -f "$tmp"; exit $?; fi; if command -v sudo >/dev/null 2>&1 && [ -n "$sudo_pw" ]; then printf '%%s\n' "$sudo_pw" | sudo -S -k sh -c "cat \"$tmp\" > /etc/hosts"; rc=$?; rm -f "$tmp"; exit $rc; fi; rm -f "$tmp"; echo "need sudo privilege to write /etc/hosts" >&2; exit 1`,
+		shellEscape(sudoPasswordB64),
 		regexpEscape(host),
 		shellEscape(address),
 		shellEscape(host),
