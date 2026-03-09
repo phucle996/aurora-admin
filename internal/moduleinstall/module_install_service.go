@@ -31,6 +31,7 @@ type ModuleInstallRequest struct {
 	SSHPort               int32
 	SSHUsername           string
 	SSHPassword           *string
+	SudoPassword          *string
 	SSHPrivateKey         *string
 	SSHHostKeyFingerprint *string
 }
@@ -50,9 +51,6 @@ type ModuleInstallResult struct {
 	SchemaName      string
 	MigrationFiles  []string
 	MigrationSource string
-
-	HealthcheckPassed bool
-	HealthcheckOutput string
 }
 
 type moduleInstallTarget struct {
@@ -61,6 +59,7 @@ type moduleInstallTarget struct {
 	Host               string
 	Port               int32
 	Password           *string
+	SudoPassword       *string
 	PrivateKey         *string
 	HostKeyFingerprint *string
 }
@@ -199,7 +198,7 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 			}
 			uiEnvPath = envRemotePath
 		}
-		command = s.buildDefaultInstallCommand(moduleName, appHost, endpointPort, adminRPCEndpoint, uiEnvPath, target.Password)
+		command = s.buildDefaultInstallCommand(moduleName, appHost, endpointPort, adminRPCEndpoint, uiEnvPath, target.SudoPassword)
 		if command != "" {
 			logInstall(logFn, "install", "resolved default install command for module=%s", moduleName)
 		}
@@ -215,29 +214,17 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 	}
 
 	logInstall(logFn, "install", "running install command")
-	logInstall(
-		logFn,
-		"ssh",
-		"exec begin host=%s port=%d user=%s auth=%s timeout=%s cmd_bytes=%d",
-		target.Host,
-		target.Port,
-		target.Username,
-		describeSSHAuthMode(target),
-		installSSHCommandTimeout.String(),
-		len(command),
-	)
 	output, exitCode, installErr := runInstallCommand(
 		ctx,
 		command,
 		target,
 		func(line string) {
-			logInstall(logFn, "ssh", "[stdout] %s", line)
+			logInstall(logFn, "ssh", "%s", line)
 		},
 		func(line string) {
-			logInstall(logFn, "ssh", "[stderr] %s", line)
+			logInstall(logFn, "ssh", "%s", line)
 		},
 	)
-	logInstall(logFn, "ssh", "exec completed exit_code=%d output_lines=%d", exitCode, lineCount(output))
 	result.InstallExecuted = true
 	result.InstallOutput = strings.TrimSpace(output)
 	result.InstallExitCode = exitCode
@@ -278,10 +265,9 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 			Host:    hostEntryHost,
 		},
 	}
-	hostTargets := []moduleInstallTarget{target}
 	logInstall(logFn, "hosts", "sync app host /etc/hosts on target (required) host=%s address=%s target=%s", hostEntryHost, targetAddr, target.Host)
 
-	hostsUpdated, hostWarnings := syncHostsForTargets(ctx, hostEntries, dedupeTargets(hostTargets))
+	hostsUpdated, hostWarnings := syncHostsForTargets(ctx, hostEntries, []moduleInstallTarget{target})
 	result.HostsUpdated = hostsUpdated
 	result.Warnings = append(result.Warnings, hostWarnings...)
 	if len(hostsUpdated) == 0 {
@@ -467,22 +453,4 @@ func (s *ModuleInstallService) prepareSchemaAndMigrate(
 	result.MigrationSource = migrationSource
 	logInstall(logFn, "migration", "migrations applied")
 	return nil
-}
-
-func describeSSHAuthMode(target moduleInstallTarget) string {
-	if target.PrivateKey != nil && strings.TrimSpace(*target.PrivateKey) != "" {
-		return "private_key"
-	}
-	if target.Password != nil && strings.TrimSpace(*target.Password) != "" {
-		return "password"
-	}
-	return "agent_or_default_key"
-}
-
-func lineCount(raw string) int {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return 0
-	}
-	return strings.Count(trimmed, "\n") + 1
 }

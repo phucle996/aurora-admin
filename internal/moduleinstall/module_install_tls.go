@@ -74,8 +74,8 @@ func installModuleTLSOnTarget(
 	keyB64 := base64.StdEncoding.EncodeToString(bundle.KeyPEM)
 	caB64 := base64.StdEncoding.EncodeToString(bundle.CAPEM)
 	sudoPasswordB64 := ""
-	if target.Password != nil {
-		sudoPasswordB64 = base64.StdEncoding.EncodeToString([]byte(*target.Password))
+	if target.SudoPassword != nil {
+		sudoPasswordB64 = base64.StdEncoding.EncodeToString([]byte(*target.SudoPassword))
 	}
 
 	ownerUser := "aurora"
@@ -132,8 +132,8 @@ func moduleTLSExistsOnTarget(
 ) (bool, string, error) {
 	paths := resolveModuleTLSPaths(moduleName)
 	sudoPasswordB64 := ""
-	if target.Password != nil {
-		sudoPasswordB64 = base64.StdEncoding.EncodeToString([]byte(*target.Password))
+	if target.SudoPassword != nil {
+		sudoPasswordB64 = base64.StdEncoding.EncodeToString([]byte(*target.SudoPassword))
 	}
 
 	script := strings.Join([]string{

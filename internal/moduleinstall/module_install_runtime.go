@@ -161,6 +161,7 @@ func buildInstallTarget(scope string, req ModuleInstallRequest) (moduleInstallTa
 		}
 		target.Port = normalizePort(req.SSHPort)
 		target.Password = normalizeOptionalSecret(req.SSHPassword)
+		target.SudoPassword = normalizeOptionalSecret(req.SudoPassword)
 		target.PrivateKey = normalizeOptionalSecret(req.SSHPrivateKey)
 		target.HostKeyFingerprint = normalizeOptionalSecret(req.SSHHostKeyFingerprint)
 		if target.Username == "" || target.Host == "" {
@@ -194,11 +195,6 @@ func encodeEndpointValue(target moduleInstallTarget, endpoint string) string {
 		fingerprint,
 		strings.TrimSpace(endpoint),
 	)
-}
-
-func parseEndpointTarget(raw string) (moduleInstallTarget, bool) {
-	target, _, ok := parseEndpointTargetAndEndpoint(raw)
-	return target, ok
 }
 
 func parseEndpointTargetAndEndpoint(raw string) (moduleInstallTarget, string, bool) {
@@ -530,18 +526,6 @@ func detectLocalIPv4() string {
 		}
 	}
 	return "127.0.0.1"
-}
-
-func isLoopbackAddress(raw string) bool {
-	clean := strings.TrimSpace(raw)
-	if clean == "" {
-		return false
-	}
-	if clean == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(clean)
-	return ip != nil && ip.IsLoopback()
 }
 
 func endpointHost(endpoint string) string {

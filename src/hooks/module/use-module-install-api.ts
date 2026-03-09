@@ -1,5 +1,3 @@
-import axios from "axios";
-
 import { resolveAdminBaseURL } from "@/lib/admin-auth";
 
 export type ModuleInstallScope = "remote";
@@ -15,6 +13,7 @@ export type ModuleInstallPayload = {
   ssh_port?: number;
   ssh_username?: string;
   ssh_password?: string;
+  sudo_password?: string;
   ssh_private_key?: string;
   ssh_host_key_fingerprint?: string;
 };
@@ -33,8 +32,6 @@ export type ModuleInstallResult = {
   schema_name: string;
   migration_files: string[];
   migration_source: string;
-  healthcheck_passed: boolean;
-  healthcheck_output: string;
 };
 
 export type ModuleReinstallCertPayload = {
@@ -102,8 +99,6 @@ function parseModuleInstallResult(raw: unknown): ModuleInstallResult {
     schema_name: toStringValue(row.schema_name),
     migration_files: toStringList(row.migration_files),
     migration_source: toStringValue(row.migration_source),
-    healthcheck_passed: Boolean(row.healthcheck_passed),
-    healthcheck_output: toStringValue(row.healthcheck_output),
   };
 }
 
@@ -121,23 +116,6 @@ function parseModuleReinstallCertResult(raw: unknown): ModuleReinstallCertResult
     healthcheck_passed: Boolean(row.healthcheck_passed),
     healthcheck_output: toStringValue(row.healthcheck_output),
   };
-}
-
-export async function installModule(
-  payload: ModuleInstallPayload,
-): Promise<ModuleInstallResult> {
-  const response = await axios.post<ModuleInstallApiResponse>(
-    `${resolveAdminBaseURL()}/api/v1/modules/install`,
-    payload,
-    {
-      withCredentials: true,
-      timeout: 45000,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    },
-  );
-  return parseModuleInstallResult(response.data?.data);
 }
 
 type ModuleInstallStreamOptions = {

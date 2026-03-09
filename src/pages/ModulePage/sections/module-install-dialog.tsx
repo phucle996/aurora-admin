@@ -23,6 +23,7 @@ type ModuleInstallDialogProps = {
   sshPort: string;
   sshUsername: string;
   sshPassword: string;
+  sudoPassword: string;
   sshPrivateKey: string;
   sshHostKeyFingerprint: string;
   onOpenChange: (open: boolean) => void;
@@ -32,6 +33,7 @@ type ModuleInstallDialogProps = {
   onSshPortChange: (value: string) => void;
   onSshUsernameChange: (value: string) => void;
   onSshPasswordChange: (value: string) => void;
+  onSudoPasswordChange: (value: string) => void;
   onSshPrivateKeyChange: (value: string) => void;
   onSshHostKeyFingerprintChange: (value: string) => void;
   onInstall: () => void;
@@ -47,6 +49,7 @@ export function ModuleInstallDialog({
   sshPort,
   sshUsername,
   sshPassword,
+  sudoPassword,
   sshPrivateKey,
   sshHostKeyFingerprint,
   onOpenChange,
@@ -56,6 +59,7 @@ export function ModuleInstallDialog({
   onSshPortChange,
   onSshUsernameChange,
   onSshPasswordChange,
+  onSudoPasswordChange,
   onSshPrivateKeyChange,
   onSshHostKeyFingerprintChange,
   onInstall,
@@ -135,6 +139,16 @@ export function ModuleInstallDialog({
                 value={sshPassword}
                 onChange={(event) => onSshPasswordChange(event.target.value)}
                 placeholder="password"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="sudo-password">Sudo Password (optional)</Label>
+              <Input
+                id="sudo-password"
+                type="password"
+                value={sudoPassword}
+                onChange={(event) => onSudoPasswordChange(event.target.value)}
+                placeholder="sudo password (khong nhap se khong auto sudo -S)"
               />
             </div>
             <div className="space-y-2">

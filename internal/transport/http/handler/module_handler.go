@@ -113,6 +113,7 @@ func (h *EnabledModuleHandler) Install(c *gin.Context) {
 		SSHPort:               req.SSHPort,
 		SSHUsername:           req.SSHUsername,
 		SSHPassword:           normalizeOptionalSecret(req.SSHPassword),
+		SudoPassword:          normalizeOptionalSecret(req.SudoPassword),
 		SSHPrivateKey:         normalizeOptionalSecret(req.SSHPrivateKey),
 		SSHHostKeyFingerprint: normalizeOptionalSecret(req.SSHHostKeyFingerprint),
 	}, nil)
@@ -214,10 +215,6 @@ func (h *EnabledModuleHandler) InstallStream(c *gin.Context) {
 	stopHeartbeat := startSSEHeartbeat(ctx, c.Writer, flusher, &writeMu, cancel, moduleInstallSSEHeartbeatEvery)
 	defer stopHeartbeat()
 
-	if !emitEvent("log", "ui", "stream connected, start install", nil) {
-		return
-	}
-
 	result, err := h.InstallSv.InstallWithLog(ctx, installsvc.ModuleInstallRequest{
 		ModuleName:            moduleName,
 		Scope:                 req.Scope,
@@ -229,6 +226,7 @@ func (h *EnabledModuleHandler) InstallStream(c *gin.Context) {
 		SSHPort:               req.SSHPort,
 		SSHUsername:           req.SSHUsername,
 		SSHPassword:           normalizeOptionalSecret(req.SSHPassword),
+		SudoPassword:          normalizeOptionalSecret(req.SudoPassword),
 		SSHPrivateKey:         normalizeOptionalSecret(req.SSHPrivateKey),
 		SSHHostKeyFingerprint: normalizeOptionalSecret(req.SSHHostKeyFingerprint),
 	}, func(stage, message string) {
@@ -368,10 +366,6 @@ func (h *EnabledModuleHandler) ReinstallCertStream(c *gin.Context) {
 	stopHeartbeat := startSSEHeartbeat(ctx, c.Writer, flusher, &writeMu, cancel, moduleInstallSSEHeartbeatEvery)
 	defer stopHeartbeat()
 
-	if !emitEvent("log", "ui", "stream connected, start reinstall cert", nil) {
-		return
-	}
-
 	result, err := h.InstallSv.ReinstallCertWithLog(ctx, installsvc.ModuleReinstallCertRequest{
 		ModuleName: moduleName,
 	}, func(stage, message string) {
@@ -447,21 +441,19 @@ func startSSEHeartbeat(
 
 func buildModuleInstallResponse(item installsvc.ModuleInstallResult) resdto.ModuleInstallResult {
 	return resdto.ModuleInstallResult{
-		ModuleName:        item.ModuleName,
-		Scope:             item.Scope,
-		Endpoint:          item.Endpoint,
-		EndpointValue:     item.EndpointValue,
-		InstallExecuted:   item.InstallExecuted,
-		InstallOutput:     item.InstallOutput,
-		InstallExitCode:   item.InstallExitCode,
-		HostsUpdated:      item.HostsUpdated,
-		Warnings:          item.Warnings,
-		SchemaKey:         item.SchemaKey,
-		SchemaName:        item.SchemaName,
-		MigrationFiles:    item.MigrationFiles,
-		MigrationSource:   item.MigrationSource,
-		HealthcheckPassed: item.HealthcheckPassed,
-		HealthcheckOutput: item.HealthcheckOutput,
+		ModuleName:      item.ModuleName,
+		Scope:           item.Scope,
+		Endpoint:        item.Endpoint,
+		EndpointValue:   item.EndpointValue,
+		InstallExecuted: item.InstallExecuted,
+		InstallOutput:   item.InstallOutput,
+		InstallExitCode: item.InstallExitCode,
+		HostsUpdated:    item.HostsUpdated,
+		Warnings:        item.Warnings,
+		SchemaKey:       item.SchemaKey,
+		SchemaName:      item.SchemaName,
+		MigrationFiles:  item.MigrationFiles,
+		MigrationSource: item.MigrationSource,
 	}
 }
 

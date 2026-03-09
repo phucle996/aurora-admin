@@ -5,36 +5,10 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
-
-func dedupeTargets(items []moduleInstallTarget) []moduleInstallTarget {
-	out := make([]moduleInstallTarget, 0, len(items))
-	seen := make(map[string]struct{}, len(items))
-	for _, item := range items {
-		key := strings.Join([]string{
-			item.Scope,
-			item.Username,
-			item.Host,
-			strconv.Itoa(int(item.Port)),
-			deref(item.Password),
-			deref(item.PrivateKey),
-			deref(item.HostKeyFingerprint),
-		}, "|")
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, item)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].Host < out[j].Host
-	})
-	return out
-}
 
 func syncHostsForTargets(
 	ctx context.Context,
@@ -69,7 +43,7 @@ func syncHostsForTargets(
 				continue
 			}
 			for _, entry := range entries {
-				cmd := buildHostsUpdateCommand(entry.Address, entry.Host, target.Password)
+				cmd := buildHostsUpdateCommand(entry.Address, entry.Host, target.SudoPassword)
 				runCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 				runResult, err := sshpkg.Run(runCtx, sshpkg.RunInput{
 					Host:               target.Host,

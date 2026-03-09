@@ -15,8 +15,8 @@ func ensureTargetInstallPrivilege(
 ) error {
 	logInstall(logFn, "preflight", "checking install privilege on target")
 	sudoPasswordB64 := ""
-	if target.Password != nil {
-		sudoPasswordB64 = base64.StdEncoding.EncodeToString([]byte(*target.Password))
+	if target.SudoPassword != nil {
+		sudoPasswordB64 = base64.StdEncoding.EncodeToString([]byte(*target.SudoPassword))
 	}
 
 	script := strings.Join([]string{
@@ -64,7 +64,7 @@ func ensureTargetInstallPrivilege(
 
 	switch exitCode {
 	case 11:
-		return fmt.Errorf("target user %s has sudo but cannot run non-interactive sudo; use root user or grant NOPASSWD sudo", target.Username)
+		return fmt.Errorf("target user %s has sudo but cannot run non-interactive sudo; provide sudo_password from UI, use root user, or grant NOPASSWD sudo", target.Username)
 	case 12:
 		return fmt.Errorf("target user %s has no sudo; use root user or install sudo + NOPASSWD policy", target.Username)
 	default:

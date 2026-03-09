@@ -255,6 +255,32 @@ ensure_service_user() {
   as_root chmod 700 "$SERVICE_HOME"
 }
 
+ensure_service_user_sudo_group() {
+  # Allow runtime process user to run sudo when explicitly required by module-install flows.
+  if ! getent group sudo >/dev/null 2>&1; then
+    if command -v groupadd >/dev/null 2>&1; then
+      as_root groupadd sudo || true
+    elif command -v addgroup >/dev/null 2>&1; then
+      as_root addgroup sudo || true
+    fi
+  fi
+
+  if getent group sudo >/dev/null 2>&1; then
+    if id -nG "$SERVICE_USER" | tr ' ' '\n' | grep -qx "sudo"; then
+      return
+    fi
+    if command -v usermod >/dev/null 2>&1; then
+      as_root usermod -aG sudo "$SERVICE_USER"
+      return
+    fi
+    if command -v adduser >/dev/null 2>&1; then
+      as_root adduser "$SERVICE_USER" sudo
+      return
+    fi
+    warn "cannot add ${SERVICE_USER} to sudo group automatically"
+  fi
+}
+
 ensure_tls_dir() {
   as_root mkdir -p "$TLS_DIR"
   as_root chown root:"$SERVICE_GROUP" "$TLS_DIR"
@@ -755,6 +781,7 @@ main() {
   [ -n "$tag" ] || die "cannot resolve release tag"
 
   ensure_service_user
+  ensure_service_user_sudo_group
   ensure_tls_dir
   install_binary "$tag" "$machine_arch"
   install_env_file "$INPUT_ENV_FILE"

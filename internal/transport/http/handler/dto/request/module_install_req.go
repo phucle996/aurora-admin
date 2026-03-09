@@ -11,6 +11,7 @@ type ModuleInstallRequest struct {
 	SSHPort               int32   `json:"ssh_port"`
 	SSHUsername           string  `json:"ssh_username"`
 	SSHPassword           *string `json:"ssh_password"`
+	SudoPassword          *string `json:"sudo_password"`
 	SSHPrivateKey         *string `json:"ssh_private_key"`
 	SSHHostKeyFingerprint *string `json:"ssh_host_key_fingerprint"`
 }

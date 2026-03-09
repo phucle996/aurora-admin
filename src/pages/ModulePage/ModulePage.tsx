@@ -34,6 +34,7 @@ export default function ModulePage() {
   const [sshPort, setSshPort] = useState("22");
   const [sshUsername, setSshUsername] = useState("aurora");
   const [sshPassword, setSshPassword] = useState("");
+  const [sudoPassword, setSudoPassword] = useState("");
   const [sshPrivateKey, setSshPrivateKey] = useState("");
   const [sshHostKeyFingerprint, setSshHostKeyFingerprint] = useState("");
   const [installLogDialogOpen, setInstallLogDialogOpen] = useState(false);
@@ -92,30 +93,14 @@ export default function ModulePage() {
     setSshPort("22");
     setSshUsername("aurora");
     setSshPassword("");
+    setSudoPassword("");
     setSshPrivateKey("");
     setSshHostKeyFingerprint("");
     setInstallDialogOpen(true);
   };
 
   const appendInstallLog = (line: string) => {
-    setInstallLogs((prev) => [
-      ...prev,
-      `[${new Date().toLocaleTimeString()}] ${line}`,
-    ]);
-  };
-
-  const appendResultOutputLogs = (prefix: string, output: string) => {
-    const normalized = output.replace(/\r\n/g, "\n").trim();
-    if (!normalized) {
-      return;
-    }
-    for (const line of normalized.split("\n")) {
-      const value = line.trim();
-      if (!value) {
-        continue;
-      }
-      appendInstallLog(`[${prefix}] ${value}`);
-    }
+    setInstallLogs((prev) => [...prev, line]);
   };
 
   const handleInstall = async () => {
@@ -157,11 +142,6 @@ export default function ModulePage() {
     setInstallResult(null);
     setInstallError("");
     setInstallLogs([]);
-    appendInstallLog("[ui] start module install");
-    appendInstallLog(
-      `[ui] module=${moduleName} scope=${installScope} app_host=${normalizedAppHost} app_port=${normalizedAppPort || "(random)"}`,
-    );
-    appendInstallLog("[ui] waiting backend stream events...");
 
     try {
       const result = await installModuleStream({
@@ -173,32 +153,19 @@ export default function ModulePage() {
         ssh_port: Number.parseInt(sshPort.trim(), 10) || 22,
         ssh_username: sshUsername.trim() || undefined,
         ssh_password: sshPassword.trim() || undefined,
+        sudo_password: sudoPassword.trim() || undefined,
         ssh_private_key: sshPrivateKey.trim() || undefined,
         ssh_host_key_fingerprint: sshHostKeyFingerprint.trim() || undefined,
       }, {
         onLog: (stage, message) => {
+          if (stage === "ssh") {
+            appendInstallLog(message);
+            return;
+          }
           appendInstallLog(`[${stage}] ${message}`);
         },
       });
       setInstallResult(result);
-
-      appendInstallLog(
-        `[summary] endpoint=${result.endpoint} healthcheck=${result.healthcheck_passed ? "ok" : "failed"}`,
-      );
-      if (result.schema_name) {
-        appendInstallLog(`[summary] schema=${result.schema_name}`);
-      }
-      if (result.migration_source) {
-        appendInstallLog(`[summary] migration_source=${result.migration_source}`);
-      }
-      if (result.migration_files.length > 0) {
-        appendInstallLog(`[summary] migration_files=${result.migration_files.join(", ")}`);
-      }
-      appendResultOutputLogs("install_output", result.install_output);
-      appendResultOutputLogs("healthcheck_output", result.healthcheck_output);
-      for (const warning of result.warnings) {
-        appendInstallLog(`[warn] ${warning}`);
-      }
 
       if (result.warnings.length > 0) {
         toast.warning(result.warnings.join(" | "));
@@ -213,7 +180,7 @@ export default function ModulePage() {
           ? err.message
           : "Install module that bai";
       setInstallError(message);
-      appendInstallLog(`[ui][error] ${message}`);
+      appendInstallLog(`[error] ${message}`);
       if (err instanceof Error && err.message.trim()) {
         toast.error(err.message);
       } else {
@@ -241,9 +208,6 @@ export default function ModulePage() {
     setInstallResult(null);
     setInstallError("");
     setInstallLogs([]);
-    appendInstallLog("[ui] start module cert reinstall");
-    appendInstallLog(`[ui] module=${moduleName}`);
-    appendInstallLog("[ui] waiting backend stream events...");
 
     try {
       const result = await reinstallModuleCertStream(
@@ -252,22 +216,16 @@ export default function ModulePage() {
         },
         {
           onLog: (stage, message) => {
+            if (stage === "ssh") {
+              appendInstallLog(message);
+              return;
+            }
             appendInstallLog(`[${stage}] ${message}`);
           },
         },
       );
 
       setInstallResult(result);
-      appendInstallLog(
-        `[summary] endpoint=${result.endpoint} target=${result.target_host} healthcheck=${result.healthcheck_passed ? "ok" : "failed"}`,
-      );
-      appendInstallLog(`[summary] cert_path=${result.cert_path}`);
-      appendInstallLog(`[summary] key_path=${result.key_path}`);
-      appendInstallLog(`[summary] ca_path=${result.ca_path}`);
-      appendResultOutputLogs("healthcheck_output", result.healthcheck_output);
-      for (const warning of result.warnings) {
-        appendInstallLog(`[warn] ${warning}`);
-      }
 
       if (result.warnings.length > 0) {
         toast.warning(result.warnings.join(" | "));
@@ -282,7 +240,7 @@ export default function ModulePage() {
           ? err.message
           : "Reinstall cert that bai";
       setInstallError(message);
-      appendInstallLog(`[ui][error] ${message}`);
+      appendInstallLog(`[error] ${message}`);
       if (err instanceof Error && err.message.trim()) {
         toast.error(err.message);
       } else {
@@ -321,6 +279,7 @@ export default function ModulePage() {
         sshPort={sshPort}
         sshUsername={sshUsername}
         sshPassword={sshPassword}
+        sudoPassword={sudoPassword}
         sshPrivateKey={sshPrivateKey}
         sshHostKeyFingerprint={sshHostKeyFingerprint}
         onOpenChange={setInstallDialogOpen}
@@ -330,6 +289,7 @@ export default function ModulePage() {
         onSshPortChange={setSshPort}
         onSshUsernameChange={setSshUsername}
         onSshPasswordChange={setSshPassword}
+        onSudoPasswordChange={setSudoPassword}
         onSshPrivateKeyChange={setSshPrivateKey}
         onSshHostKeyFingerprintChange={setSshHostKeyFingerprint}
         onInstall={handleInstall}

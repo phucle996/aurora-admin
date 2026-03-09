@@ -1,6 +1,6 @@
 import { CheckCircle2, Loader2, XCircle } from "lucide-react";
 
-import { KvmTerminalStreamSection } from "@/components/terminal-stream";
+import { SSHLiveTerminal } from "@/components/ssh-live-terminal";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -60,15 +60,7 @@ export function ModuleInstallLogDialog({
         </DialogHeader>
 
         <section className="space-y-3">
-          <KvmTerminalStreamSection
-            logs={logs}
-            checking={running}
-            terminalLabel="aurora@module-installer:~"
-            shellPrompt="aurora@installer:~$"
-            shellName="bash"
-            emptyMessage="initializing install session..."
-            className="h-full"
-          />
+          <SSHLiveTerminal logs={logs} running={running} />
         </section>
 
         <DialogFooter>

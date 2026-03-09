@@ -15,7 +15,4 @@ type ModuleInstallResult struct {
 	SchemaName      string   `json:"schema_name"`
 	MigrationFiles  []string `json:"migration_files"`
 	MigrationSource string   `json:"migration_source"`
-
-	HealthcheckPassed bool   `json:"healthcheck_passed"`
-	HealthcheckOutput string `json:"healthcheck_output"`
 }
