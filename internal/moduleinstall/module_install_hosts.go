@@ -126,9 +126,11 @@ func buildHostsUpdateScript(address, host string, sudoPassword *string) string {
 	if sudoPassword != nil {
 		sudoPasswordB64 = base64.StdEncoding.EncodeToString([]byte(*sudoPassword))
 	}
+	hostPattern := fmt.Sprintf("(^|[[:space:]])%s([[:space:]]|$)", regexpEscape(host))
 	updateCmd := fmt.Sprintf(
-		`sed -i -E '/(^|[[:space:]])%s([[:space:]]|$)/d' /etc/hosts && printf '%%s %%s\n' %s %s >> /etc/hosts`,
-		regexpEscape(host),
+		`if grep -Eq %s /etc/hosts; then sed -i -E '/%s/d' /etc/hosts; fi; printf '%%s %%s\n' %s %s >> /etc/hosts`,
+		shellEscape(hostPattern),
+		hostPattern,
 		shellEscape(address),
 		shellEscape(host),
 	)
