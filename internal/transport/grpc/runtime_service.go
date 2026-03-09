@@ -372,19 +372,74 @@ func readMetricRecords(req *structpb.Struct, key string) ([]service.AgentMetricR
 			continue
 		}
 		fields := item.GetStructValue().GetFields()
+
+		gpu := service.AgentGPUMetricRecord{}
+		if gpuField, ok := fields["gpu"]; ok && gpuField != nil && gpuField.GetStructValue() != nil {
+			gpuFields := gpuField.GetStructValue().GetFields()
+			gpu = service.AgentGPUMetricRecord{
+				Count:            readStructUintField(gpuFields, "count"),
+				UtilPercent:      readStructNumberField(gpuFields, "util_percent"),
+				MemoryUsedBytes:  readStructUintField(gpuFields, "memory_used_bytes"),
+				MemoryTotalBytes: readStructUintField(gpuFields, "memory_total_bytes"),
+			}
+		}
+
 		record := service.AgentMetricRecord{
 			TimestampUnixMillis: int64(readStructNumberField(fields, "ts_ms")),
 			CPUUsagePercent:     readStructNumberField(fields, "cpu_usage_percent"),
-			MemoryUsedPercent:   readStructNumberField(fields, "memory_used_percent"),
+			MemoryUsedBytes:     readStructUintField(fields, "memory_used_bytes"),
+			MemoryTotalBytes:    readStructUintField(fields, "memory_total_bytes"),
 			DiskReadBps:         readStructNumberField(fields, "disk_read_bps"),
 			DiskWriteBps:        readStructNumberField(fields, "disk_write_bps"),
 			NetworkRxBps:        readStructNumberField(fields, "network_rx_bps"),
 			NetworkTxBps:        readStructNumberField(fields, "network_tx_bps"),
+			GPU:                 gpu,
+			Services:            readMetricServiceRecords(fields, "services"),
 			UptimeSeconds:       uint64(readStructNumberField(fields, "uptime_seconds")),
+		}
+		if record.MemoryUsedBytes == 0 {
+			legacyPercent := readStructNumberField(fields, "memory_used_percent")
+			if legacyPercent > 0 && record.MemoryTotalBytes > 0 {
+				record.MemoryUsedBytes = uint64((legacyPercent / 100) * float64(record.MemoryTotalBytes))
+			}
 		}
 		out = append(out, record)
 	}
 	return out, nil
+}
+
+func readMetricServiceRecords(fields map[string]*structpb.Value, key string) []service.AgentServiceMetricRecord {
+	if len(fields) == 0 {
+		return nil
+	}
+	v, ok := fields[key]
+	if !ok || v == nil || v.GetListValue() == nil {
+		return nil
+	}
+	items := v.GetListValue().GetValues()
+	if len(items) == 0 {
+		return nil
+	}
+
+	out := make([]service.AgentServiceMetricRecord, 0, len(items))
+	for _, item := range items {
+		if item == nil || item.GetStructValue() == nil {
+			continue
+		}
+		serviceFields := item.GetStructValue().GetFields()
+		out = append(out, service.AgentServiceMetricRecord{
+			Service:            readStructStringField(serviceFields, "service"),
+			CPUUsagePercent:    readStructNumberField(serviceFields, "cpu_usage_percent"),
+			MemoryUsedBytes:    readStructUintField(serviceFields, "memory_used_bytes"),
+			DiskReadBps:        readStructNumberField(serviceFields, "disk_read_bps"),
+			DiskWriteBps:       readStructNumberField(serviceFields, "disk_write_bps"),
+			NetworkRxBps:       readStructNumberField(serviceFields, "network_rx_bps"),
+			NetworkTxBps:       readStructNumberField(serviceFields, "network_tx_bps"),
+			GPUUtilPercent:     readStructNumberField(serviceFields, "gpu_util_percent"),
+			GPUMemoryUsedBytes: readStructUintField(serviceFields, "gpu_memory_used_bytes"),
+		})
+	}
+	return out
 }
 
 func readStructNumberField(fields map[string]*structpb.Value, key string) float64 {
@@ -396,6 +451,25 @@ func readStructNumberField(fields map[string]*structpb.Value, key string) float6
 		return 0
 	}
 	return value.GetNumberValue()
+}
+
+func readStructUintField(fields map[string]*structpb.Value, key string) uint64 {
+	n := readStructNumberField(fields, key)
+	if n <= 0 {
+		return 0
+	}
+	return uint64(n)
+}
+
+func readStructStringField(fields map[string]*structpb.Value, key string) string {
+	if len(fields) == 0 {
+		return ""
+	}
+	value, ok := fields[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return strings.TrimSpace(value.GetStringValue())
 }
 
 func RegisterRuntimeTransportServer(server *gogrpc.Server, svc *RuntimeTransportService) {
