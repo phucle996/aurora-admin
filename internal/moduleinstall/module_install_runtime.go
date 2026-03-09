@@ -2,28 +2,23 @@ package moduleinstall
 
 import (
 	"admin/pkg/errorvar"
-	sshpkg "admin/pkg/ssh"
 	pkgutils "admin/pkg/utils"
-	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
-	"io"
 	"math/big"
 	"net"
 	"net/url"
-	"os/exec"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
 const (
-	randomPortMin            = 20000
-	randomPortMax            = 60000
-	installSSHCommandTimeout = 40 * time.Minute
+	randomPortMin         = 20000
+	randomPortMax         = 60000
+	installCommandTimeout = 40 * time.Minute
 )
 
 func runInstallCommand(
@@ -33,7 +28,7 @@ func runInstallCommand(
 	onStdout func(line string),
 	onStderr func(line string),
 ) (string, int, error) {
-	return runCommandOnTarget(ctx, target, command, installSSHCommandTimeout, onStdout, onStderr)
+	return runCommandOnTarget(ctx, target, command, installCommandTimeout, onStdout, onStderr)
 }
 
 func runCommandOnTarget(
@@ -44,106 +39,10 @@ func runCommandOnTarget(
 	onStdout func(line string),
 	onStderr func(line string),
 ) (string, int, error) {
-	if target.Scope == ModuleInstallScopeLocal {
-		if onStdout == nil && onStderr == nil {
-			cmd := exec.CommandContext(ctx, "bash", "-lc", command)
-			out, err := cmd.CombinedOutput()
-			exitCode := 0
-			if cmd.ProcessState != nil {
-				exitCode = cmd.ProcessState.ExitCode()
-			}
-			return string(out), exitCode, err
-		}
-
-		cmd := exec.CommandContext(ctx, "bash", "-lc", command)
-		stdoutPipe, err := cmd.StdoutPipe()
-		if err != nil {
-			return "", -1, err
-		}
-		stderrPipe, err := cmd.StderrPipe()
-		if err != nil {
-			return "", -1, err
-		}
-
-		var outputMu sync.Mutex
-		var outputBuilder strings.Builder
-		appendLine := func(line string) {
-			outputMu.Lock()
-			outputBuilder.WriteString(line)
-			outputBuilder.WriteByte('\n')
-			outputMu.Unlock()
-		}
-
-		var wg sync.WaitGroup
-		var readErrMu sync.Mutex
-		var readErr error
-		setReadErr := func(err error) {
-			if err == nil {
-				return
-			}
-			readErrMu.Lock()
-			if readErr == nil {
-				readErr = err
-			}
-			readErrMu.Unlock()
-		}
-
-		consumePipe := func(pipe io.Reader, onLine func(line string)) {
-			defer wg.Done()
-			scanner := bufio.NewScanner(pipe)
-			scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-			for scanner.Scan() {
-				line := scanner.Text()
-				appendLine(line)
-				if onLine != nil {
-					onLine(line)
-				}
-			}
-			setReadErr(scanner.Err())
-		}
-
-		wg.Add(2)
-		go consumePipe(stdoutPipe, onStdout)
-		go consumePipe(stderrPipe, onStderr)
-
-		if err := cmd.Start(); err != nil {
-			return "", -1, err
-		}
-		waitErr := cmd.Wait()
-		wg.Wait()
-
-		readErrMu.Lock()
-		scannerErr := readErr
-		readErrMu.Unlock()
-		if scannerErr != nil && waitErr == nil {
-			waitErr = scannerErr
-		}
-
-		exitCode := 0
-		if cmd.ProcessState != nil {
-			exitCode = cmd.ProcessState.ExitCode()
-		}
-		return outputBuilder.String(), exitCode, waitErr
+	if target.AgentGRPCEndpoint != "" {
+		return runCommandOnAgent(ctx, target, command, timeout, onStdout, onStderr)
 	}
-
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	result, err := sshpkg.Run(runCtx, sshpkg.RunInput{
-		Host:               target.Host,
-		Port:               target.Port,
-		Username:           target.Username,
-		Password:           target.Password,
-		PrivateKey:         target.PrivateKey,
-		HostKeyFingerprint: target.HostKeyFingerprint,
-		Timeout:            timeout,
-		Command:            command,
-		OnStdout:           onStdout,
-		OnStderr:           onStderr,
-	})
-	if result == nil {
-		return "", -1, err
-	}
-	return result.Output, result.ExitCode, err
+	return "", -1, fmt.Errorf("agent endpoint is required")
 }
 
 func buildInstallTarget(scope string, req ModuleInstallRequest) (moduleInstallTarget, error) {
@@ -154,21 +53,26 @@ func buildInstallTarget(scope string, req ModuleInstallRequest) (moduleInstallTa
 
 	switch scope {
 	case ModuleInstallScopeRemote:
-		target.Username = strings.TrimSpace(req.SSHUsername)
-		target.Host = normalizeAddress(req.SSHHost)
-		if !isValidHost(target.Host) {
-			return target, fmt.Errorf("ssh_host is invalid")
-		}
-		target.Port = normalizePort(req.SSHPort)
-		target.Password = normalizeOptionalSecret(req.SSHPassword)
+		target.AgentID = normalizeInstallAgentID(req.AgentID)
+		target.AgentGRPCEndpoint = normalizeAgentGRPCEndpoint(req.AgentGRPCEndpoint)
+		target.Username = strings.TrimSpace(req.TargetUser)
+		target.Host = normalizeAddress(req.TargetHost)
 		target.SudoPassword = normalizeOptionalSecret(req.SudoPassword)
-		target.PrivateKey = normalizeOptionalSecret(req.SSHPrivateKey)
-		target.HostKeyFingerprint = normalizeOptionalSecret(req.SSHHostKeyFingerprint)
-		if target.Username == "" || target.Host == "" {
-			return target, fmt.Errorf("ssh_username and ssh_host are required for remote install")
+		if target.AgentGRPCEndpoint == "" {
+			return target, fmt.Errorf("agent endpoint is required for remote install")
 		}
-		if target.HostKeyFingerprint == nil {
-			return target, fmt.Errorf("ssh_host_key_fingerprint is required for remote install")
+		if target.Host == "" {
+			target.Host = hostFromEndpoint(target.AgentGRPCEndpoint)
+		}
+		if target.Host == "" {
+			target.Host = "agent-target"
+		}
+		target.Port = normalizePort(req.TargetPort)
+		if target.Username == "" {
+			target.Username = "aurora"
+		}
+		if target.Port <= 0 || target.Port > 65535 {
+			target.Port = 22
 		}
 		return target, nil
 	default:
@@ -176,23 +80,30 @@ func buildInstallTarget(scope string, req ModuleInstallRequest) (moduleInstallTa
 	}
 }
 
-func encodeEndpointValue(target moduleInstallTarget, endpoint string) string {
-	secret := ""
-	if target.PrivateKey != nil {
-		secret = "keyb64:" + base64.RawStdEncoding.EncodeToString([]byte(*target.PrivateKey))
-	} else if target.Password != nil {
-		secret = "passb64:" + base64.RawStdEncoding.EncodeToString([]byte(*target.Password))
+func normalizeAgentGRPCEndpoint(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
 	}
-	fingerprint := strings.TrimSpace(deref(target.HostKeyFingerprint))
+	if strings.Contains(value, "://") {
+		if parsed, err := url.Parse(value); err == nil {
+			if strings.TrimSpace(parsed.Host) != "" {
+				return strings.TrimSpace(parsed.Host)
+			}
+		}
+	}
+	return value
+}
 
+func encodeEndpointValue(target moduleInstallTarget, endpoint string) string {
 	return fmt.Sprintf(
-		"%s(%s|%s|%s|%d|%s):%s",
+		"%s(%s|%s|%s|%s|%d):%s",
 		target.Scope,
+		target.AgentID,
+		target.AgentGRPCEndpoint,
 		target.Username,
 		target.Host,
-		secret,
 		target.Port,
-		fingerprint,
 		strings.TrimSpace(endpoint),
 	)
 }
@@ -209,7 +120,7 @@ func parseEndpointTargetAndEndpoint(raw string) (moduleInstallTarget, string, bo
 		return out, "", false
 	}
 	scope = normalizeScope(scope)
-	if scope != ModuleInstallScopeLocal && scope != ModuleInstallScopeRemote {
+	if scope != ModuleInstallScopeRemote {
 		return out, "", false
 	}
 
@@ -218,56 +129,39 @@ func parseEndpointTargetAndEndpoint(raw string) (moduleInstallTarget, string, bo
 		return out, "", false
 	}
 	parts := strings.Split(meta, "|")
+	if len(parts) >= 4 {
+		out.Scope = scope
+		out.AgentID = strings.TrimSpace(parts[0])
+		out.AgentGRPCEndpoint = normalizeAgentGRPCEndpoint(parts[1])
+		out.Username = strings.TrimSpace(parts[2])
+		out.Host = normalizeAddress(parts[3])
+		out.Port = 22
+		if len(parts) >= 5 {
+			if parsed, err := strconv.Atoi(strings.TrimSpace(parts[4])); err == nil && parsed > 0 && parsed <= 65535 {
+				out.Port = int32(parsed)
+			}
+		}
+		if out.Host == "" {
+			out.Host = hostFromEndpoint(out.AgentGRPCEndpoint)
+		}
+		if out.Host == "" {
+			out.Host = "agent-target"
+		}
+		if out.Username == "" {
+			out.Username = "aurora"
+		}
+		if out.AgentGRPCEndpoint == "" {
+			return moduleInstallTarget{}, "", false
+		}
+		return out, strings.TrimSpace(endpoint), true
+	}
+
 	if len(parts) < 3 {
 		return out, "", false
 	}
 
-	out.Scope = scope
-	out.Username = strings.TrimSpace(parts[0])
-	out.Host = normalizeAddress(parts[1])
-	secret := strings.TrimSpace(parts[2])
-	out.Port = 22
-	if len(parts) >= 4 {
-		if parsed, err := strconv.Atoi(strings.TrimSpace(parts[3])); err == nil && parsed > 0 && parsed <= 65535 {
-			out.Port = int32(parsed)
-		}
-	}
-	if len(parts) >= 5 {
-		fp := strings.TrimSpace(parts[4])
-		if fp != "" {
-			out.HostKeyFingerprint = &fp
-		}
-	}
-
-	if strings.HasPrefix(secret, "keyb64:") {
-		encoded := strings.TrimPrefix(secret, "keyb64:")
-		if decoded, ok := decodeBase64Secret(encoded); ok {
-			val := string(decoded)
-			out.PrivateKey = &val
-		}
-	} else if strings.HasPrefix(secret, "passb64:") {
-		encoded := strings.TrimPrefix(secret, "passb64:")
-		if decoded, ok := decodeBase64Secret(encoded); ok {
-			val := string(decoded)
-			out.Password = &val
-		}
-	} else if strings.HasPrefix(secret, "key:") {
-		// Backward compatibility for old records.
-		encoded := strings.TrimPrefix(secret, "key:")
-		if decoded, ok := decodeBase64Secret(encoded); ok {
-			val := string(decoded)
-			out.PrivateKey = &val
-		}
-	} else if secret != "" {
-		// Backward compatibility for old plain password records.
-		val := secret
-		out.Password = &val
-	}
-
-	if out.Host == "" {
-		return moduleInstallTarget{}, "", false
-	}
-	return out, strings.TrimSpace(endpoint), true
+	// Old endpoint format does not contain agent endpoint, skip as unsupported.
+	return moduleInstallTarget{}, "", false
 }
 
 func resolveEndpointFromStoredValue(raw string) string {
@@ -275,20 +169,6 @@ func resolveEndpointFromStoredValue(raw string) string {
 		return strings.TrimSpace(endpoint)
 	}
 	return strings.TrimSpace(parseLegacyEndpointValue(raw))
-}
-
-func decodeBase64Secret(encoded string) ([]byte, bool) {
-	value := strings.TrimSpace(encoded)
-	if value == "" {
-		return nil, false
-	}
-	if decoded, err := base64.RawStdEncoding.DecodeString(value); err == nil {
-		return decoded, true
-	}
-	if decoded, err := base64.StdEncoding.DecodeString(value); err == nil {
-		return decoded, true
-	}
-	return nil, false
 }
 
 func normalizeOptionalSecret(v *string) *string {
@@ -313,10 +193,6 @@ func normalizeAddress(raw string) string {
 	return pkgutils.NormalizeAddress(raw)
 }
 
-func isValidHost(host string) bool {
-	return pkgutils.IsValidHost(host)
-}
-
 func normalizeScope(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
 }
@@ -337,7 +213,7 @@ func resolveInstallEndpoint(scope string, appHost string, appPort int32, fallbac
 	if host == "" {
 		return "", 0, fmt.Errorf("app_host is invalid")
 	}
-	if !isValidHost(host) {
+	if !pkgutils.IsValidHost(host) {
 		return "", 0, fmt.Errorf("app_host is invalid")
 	}
 
@@ -388,30 +264,76 @@ func randomInstallPort() (int32, error) {
 	return int32(randomPortMin) + int32(n.Int64()), nil
 }
 
-func randomAvailableLocalPort() (int32, error) {
-	const maxAttempts = 64
+func resolveInstallPortForTarget(
+	ctx context.Context,
+	target moduleInstallTarget,
+	candidate int32,
+	explicit bool,
+) (int32, error) {
+	if candidate <= 0 || candidate > 65535 {
+		return 0, fmt.Errorf("invalid install app port")
+	}
+
+	available, checkErr := isTargetTCPPortAvailable(ctx, target, candidate)
+	if checkErr != nil {
+		return 0, checkErr
+	}
+	if available {
+		return candidate, nil
+	}
+	if explicit {
+		return 0, fmt.Errorf("requested app_port %d is already in use on target", candidate)
+	}
+
+	const maxAttempts = 32
 	for i := 0; i < maxAttempts; i++ {
-		candidate, err := randomInstallPort()
+		next, err := randomInstallPort()
 		if err != nil {
 			return 0, err
 		}
-		if isLocalTCPPortAvailable(candidate) {
-			return candidate, nil
+		ok, err := isTargetTCPPortAvailable(ctx, target, next)
+		if err != nil {
+			return 0, err
+		}
+		if ok {
+			return next, nil
 		}
 	}
-	return pkgutils.RandomAvailableLocalPort()
+	return 0, fmt.Errorf("cannot allocate available app port on target")
 }
 
-func isLocalTCPPortAvailable(port int32) bool {
+func isTargetTCPPortAvailable(ctx context.Context, target moduleInstallTarget, port int32) (bool, error) {
 	if port <= 0 || port > 65535 {
-		return false
+		return false, fmt.Errorf("invalid port")
 	}
-	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))))
-	if err != nil {
-		return false
+	script := strings.Join([]string{
+		"set -e",
+		"port=" + shellEscape(strconv.Itoa(int(port))),
+		`is_used=0`,
+		`if command -v ss >/dev/null 2>&1; then`,
+		`  if ss -ltnH "( sport = :$port )" 2>/dev/null | grep -q .; then is_used=1; fi`,
+		`elif command -v netstat >/dev/null 2>&1; then`,
+		`  if netstat -ltn 2>/dev/null | awk '{print $4}' | grep -E "[:.]$port$" >/dev/null; then is_used=1; fi`,
+		`else`,
+		`  # No socket tooling; assume available and let install fail later if conflict exists.`,
+		`  is_used=0`,
+		`fi`,
+		`if [ "$is_used" -eq 1 ]; then exit 10; fi`,
+		`exit 0`,
+	}, "\n")
+
+	output, exitCode, err := runCommandOnTarget(ctx, target, script, 15*time.Second, nil, nil)
+	if err == nil && exitCode == 0 {
+		return true, nil
 	}
-	_ = listener.Close()
-	return true
+	if exitCode == 10 {
+		return false, nil
+	}
+	detail := strings.TrimSpace(output)
+	if detail == "" {
+		return false, fmt.Errorf("check target port availability failed: %w", err)
+	}
+	return false, fmt.Errorf("check target port availability failed: %s", strings.Join(strings.Fields(detail), " "))
 }
 
 func buildDefaultModuleInstallCommand(
@@ -425,12 +347,16 @@ func buildDefaultModuleInstallCommand(
 ) string {
 	args := []string{}
 	preRunSteps := []string{}
+	envAssignments := []string{}
 
 	switch canonicalModuleName(moduleName) {
 	case "ums":
 		args = append(args, "-r", "phucle996/aurora-ums")
 		if strings.TrimSpace(appHost) != "" {
 			args = append(args, "--app-host", strings.TrimSpace(appHost))
+		}
+		if appPort > 0 {
+			envAssignments = append(envAssignments, "AURORA_UMS_BACKEND_PORT="+shellEscape(strconv.Itoa(int(appPort))))
 		}
 		if strings.TrimSpace(adminRPCEndpoint) != "" {
 			args = append(args, "--admin-rpc-endpoint", strings.TrimSpace(adminRPCEndpoint))
@@ -472,7 +398,16 @@ func buildDefaultModuleInstallCommand(
 	for _, arg := range args {
 		escapedArgs = append(escapedArgs, shellEscape(arg))
 	}
-	runScriptCmd := "\"$tmp_script\" " + strings.Join(escapedArgs, " ")
+	envPrefix := ""
+	if len(envAssignments) > 0 {
+		envPrefix = strings.Join(envAssignments, " ") + " "
+	}
+	joinedArgs := strings.Join(escapedArgs, " ")
+	runScriptCmd := envPrefix + "\"$tmp_script\" " + joinedArgs
+	sudoRunScriptCmd := "\"$tmp_script\" " + joinedArgs
+	if len(envAssignments) > 0 {
+		sudoRunScriptCmd = "env " + strings.Join(envAssignments, " ") + " " + sudoRunScriptCmd
+	}
 	sudoPasswordB64 := ""
 	if sudoPassword != nil {
 		sudoPasswordB64 = base64.StdEncoding.EncodeToString([]byte(*sudoPassword))
@@ -504,9 +439,9 @@ func buildDefaultModuleInstallCommand(
 		"if [ \"$(id -u)\" -eq 0 ]; then",
 		"  " + runScriptCmd,
 		"elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then",
-		"  " + strings.ReplaceAll(runScriptCmd, `"$tmp_script"`, `sudo -n "$tmp_script"`),
+		"  sudo -n " + sudoRunScriptCmd,
 		"elif command -v sudo >/dev/null 2>&1 && [ -n \"$sudo_pw\" ]; then",
-		"  printf '%s\\n' \"$sudo_pw\" | sudo -S -k -p '' \"$tmp_script\" " + strings.Join(escapedArgs, " "),
+		"  printf '%s\\n' \"$sudo_pw\" | sudo -S -k -p '' " + sudoRunScriptCmd,
 		"else",
 		"  " + runScriptCmd,
 		"fi",
@@ -606,8 +541,8 @@ func ensureCurlAndCheckEndpoint(
 
 	tlsPaths := resolveModuleTLSPaths(moduleName)
 	sudoPasswordB64 := ""
-	if target.Password != nil {
-		sudoPasswordB64 = base64.StdEncoding.EncodeToString([]byte(*target.Password))
+	if target.SudoPassword != nil {
+		sudoPasswordB64 = base64.StdEncoding.EncodeToString([]byte(*target.SudoPassword))
 	}
 	resolveHost := strings.TrimSpace(endpointHost(endpoint))
 	resolvePort := strings.TrimSpace(endpointPort(endpoint))

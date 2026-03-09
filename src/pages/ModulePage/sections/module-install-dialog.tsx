@@ -9,7 +9,14 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import type { ModuleInstallAgent } from "@/hooks/module/use-module-install-api";
 
 import type { ModuleStatusCard } from "./module-page-types";
 
@@ -19,21 +26,13 @@ type ModuleInstallDialogProps = {
   installTarget: ModuleStatusCard | null;
   appHost: string;
   appPort: string;
-  sshHost: string;
-  sshPort: string;
-  sshUsername: string;
-  sshPassword: string;
-  sshPrivateKey: string;
-  sshHostKeyFingerprint: string;
+  selectedAgentID: string;
+  installAgents: ModuleInstallAgent[];
+  installAgentsLoading: boolean;
   onOpenChange: (open: boolean) => void;
   onAppHostChange: (value: string) => void;
   onAppPortChange: (value: string) => void;
-  onSshHostChange: (value: string) => void;
-  onSshPortChange: (value: string) => void;
-  onSshUsernameChange: (value: string) => void;
-  onSshPasswordChange: (value: string) => void;
-  onSshPrivateKeyChange: (value: string) => void;
-  onSshHostKeyFingerprintChange: (value: string) => void;
+  onSelectedAgentIDChange: (value: string) => void;
   onInstall: () => void;
 };
 
@@ -43,23 +42,17 @@ export function ModuleInstallDialog({
   installTarget,
   appHost,
   appPort,
-  sshHost,
-  sshPort,
-  sshUsername,
-  sshPassword,
-  sshPrivateKey,
-  sshHostKeyFingerprint,
+  selectedAgentID,
+  installAgents,
+  installAgentsLoading,
   onOpenChange,
   onAppHostChange,
   onAppPortChange,
-  onSshHostChange,
-  onSshPortChange,
-  onSshUsernameChange,
-  onSshPasswordChange,
-  onSshPrivateKeyChange,
-  onSshHostKeyFingerprintChange,
+  onSelectedAgentIDChange,
   onInstall,
 }: ModuleInstallDialogProps) {
+  const selectedAgent = installAgents.find((item) => item.agent_id === selectedAgentID) ?? null;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -67,7 +60,7 @@ export function ModuleInstallDialog({
           <DialogTitle>Install Module</DialogTitle>
           <DialogDescription>
             {installTarget
-              ? `Cai module ${installTarget.label} tren remote qua SSH.`
+              ? `Cai module ${installTarget.label} tren remote qua agent.`
               : "Chon module de cai dat."}
           </DialogDescription>
         </DialogHeader>
@@ -96,70 +89,40 @@ export function ModuleInstallDialog({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="ssh-host">SSH Host / Service IP</Label>
-            <Input
-              id="ssh-host"
-              value={sshHost}
-              onChange={(event) => onSshHostChange(event.target.value)}
-              placeholder="192.168.1.10"
-            />
+            <Label htmlFor="module-agent-id">Target Agent</Label>
+            <Select
+              value={selectedAgentID}
+              onValueChange={onSelectedAgentIDChange}
+              disabled={installSubmitting || installAgentsLoading}
+            >
+              <SelectTrigger id="module-agent-id">
+                <SelectValue
+                  placeholder={
+                    installAgentsLoading
+                      ? "Dang tai danh sach agent..."
+                      : "Chon agent de install"
+                  }
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {installAgents.map((item) => (
+                  <SelectItem key={item.agent_id} value={item.agent_id}>
+                    {item.agent_id} | {item.hostname || item.host || "-"} |{" "}
+                    {item.status || "-"}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
-          <div className="space-y-3">
-            <p className="text-sm font-medium">SSH Remote Target</p>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-2">
-                <Label htmlFor="ssh-port">SSH Port</Label>
-                <Input
-                  id="ssh-port"
-                  value={sshPort}
-                  onChange={(event) => onSshPortChange(event.target.value)}
-                  placeholder="22"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="ssh-username">SSH Username</Label>
-                <Input
-                  id="ssh-username"
-                  value={sshUsername}
-                  onChange={(event) => onSshUsernameChange(event.target.value)}
-                  placeholder="root"
-                />
-              </div>
+          {selectedAgent ? (
+            <div className="space-y-1 rounded-md border px-3 py-2 text-xs text-muted-foreground">
+              <p>host: {selectedAgent.host || selectedAgent.ip_address || "-"}</p>
+              <p>user: {selectedAgent.username || "aurora"}</p>
+              <p>port: {selectedAgent.port || 22}</p>
+              <p>status: {selectedAgent.status || "-"}</p>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="ssh-password">SSH Password</Label>
-              <Input
-                id="ssh-password"
-                type="password"
-                value={sshPassword}
-                onChange={(event) => onSshPasswordChange(event.target.value)}
-                placeholder="password"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="ssh-private-key">SSH Private Key</Label>
-              <Textarea
-                id="ssh-private-key"
-                value={sshPrivateKey}
-                onChange={(event) => onSshPrivateKeyChange(event.target.value)}
-                placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="ssh-host-key-fingerprint">
-                SSH Host Key Fingerprint (SHA256)
-              </Label>
-              <Input
-                id="ssh-host-key-fingerprint"
-                value={sshHostKeyFingerprint}
-                onChange={(event) =>
-                  onSshHostKeyFingerprintChange(event.target.value)
-                }
-                placeholder="SHA256:..."
-              />
-            </div>
-          </div>
+          ) : null}
         </div>
 
         <DialogFooter>

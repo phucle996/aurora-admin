@@ -26,3 +26,4 @@ internal/app/dist/*
 *.sw?
 ./tmp
 .env
+./install/cfg

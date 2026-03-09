@@ -2,9 +2,8 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
-REPO="${AURORA_ADMIN_GITHUB_REPO:-phucle996/aurora-admin}"
-VERSION="${AURORA_ADMIN_VERSION:-latest}"
 APP_NAME="${AURORA_ADMIN_BIN_NAME:-aurora-admin-service}"
 INSTALL_DIR="${AURORA_ADMIN_INSTALL_DIR:-/usr/local/bin}"
 BIN_PATH="${INSTALL_DIR}/${APP_NAME}"
@@ -29,10 +28,10 @@ ADMIN_ROOT_AUTH_KEYS="${AURORA_ADMIN_ROOT_AUTH_KEYS:-/root/.ssh/authorized_keys}
 NGINX_SERVICE_NAME="${AURORA_ADMIN_NGINX_SERVICE_NAME:-nginx}"
 NGINX_CONF_FILE="${AURORA_ADMIN_NGINX_CONF_FILE:-/etc/nginx/conf.d/aurora-admin.conf}"
 NGINX_TEMPLATE_FILE="${AURORA_ADMIN_NGINX_TEMPLATE_FILE:-${SCRIPT_DIR}/nginx.conf}"
-NGINX_TEMPLATE_URL="${AURORA_ADMIN_NGINX_TEMPLATE_URL:-}"
 NGINX_CACHE_DIR="${AURORA_ADMIN_NGINX_CACHE_DIR:-/var/cache/nginx/aurora-admin}"
 BACKEND_PORT_MIN="${AURORA_ADMIN_BACKEND_PORT_MIN:-20000}"
 BACKEND_PORT_MAX="${AURORA_ADMIN_BACKEND_PORT_MAX:-60000}"
+SERVICE_TEMPLATE_FILE="${AURORA_ADMIN_SERVICE_TEMPLATE_FILE:-${SCRIPT_DIR}/aurora-admin.service}"
 
 CONFIG_OUTPUT="${AURORA_ADMIN_CONFIG_OUTPUT:-./aurora-admin.env.sample}"
 INPUT_ENV_FILE=""
@@ -40,10 +39,11 @@ MODE="install"
 TMP_DIR=""
 DELETE_INPUT_ENV="true"
 BACKEND_PORT=""
+LOCAL_BUILT_BINARY=""
 
-log() { printf '[install] %s\n' "$1"; }
-die() { printf '[install][error] %s\n' "$1" >&2; exit 1; }
-warn() { printf '[install][warn] %s\n' "$1" >&2; }
+log() { printf '[install.dev] %s\n' "$1"; }
+die() { printf '[install.dev][error] %s\n' "$1" >&2; exit 1; }
+warn() { printf '[install.dev][warn] %s\n' "$1" >&2; }
 
 cleanup() {
   if [ -n "${TMP_DIR}" ] && [ -d "${TMP_DIR}" ]; then
@@ -68,13 +68,12 @@ require_cmd() {
 usage() {
   cat <<'USAGE'
 Usage:
-  ./install.sh --config [output_file]
-  ./install.sh -f <env_file> [-v <release_tag>]
+  ./install.dev.sh --config [output_file]
+  ./install.dev.sh -f <env_file> [--keep-env-file]
 
 Options:
   --config [output_file]  Generate sample env file then exit.
   -f, --file <env_file>   Install using provided env file.
-  -v, --version <tag>     Install a specific GitHub release tag.
   --keep-env-file         Do not delete input env file after success.
   -h, --help              Show help.
 USAGE
@@ -97,11 +96,6 @@ parse_args() {
         INPUT_ENV_FILE="$2"
         shift
         ;;
-      -v|--version)
-        [ "$#" -gt 1 ] || die "missing value for $1"
-        VERSION="$2"
-        shift
-        ;;
       --keep-env-file)
         DELETE_INPUT_ENV="false"
         ;;
@@ -119,68 +113,6 @@ parse_args() {
   if [ "$MODE" = "config" ] && [ -n "$INPUT_ENV_FILE" ]; then
     die "cannot use --config with -f/--file"
   fi
-}
-
-arch() {
-  case "$(uname -m)" in
-    x86_64|amd64) echo "amd64" ;;
-    aarch64|arm64) echo "arm64" ;;
-    *) die "unsupported architecture: $(uname -m)" ;;
-  esac
-}
-
-download() {
-  local url="$1"
-  local out="$2"
-  local token="${AURORA_ADMIN_GITHUB_TOKEN:-}"
-
-  if command -v curl >/dev/null 2>&1; then
-    if [ -n "$token" ]; then
-      curl -fsSL -H "Authorization: Bearer ${token}" "$url" -o "$out"
-    else
-      curl -fsSL "$url" -o "$out"
-    fi
-    return
-  fi
-
-  if command -v wget >/dev/null 2>&1; then
-    if [ -n "$token" ]; then
-      wget --quiet --header="Authorization: Bearer ${token}" "$url" -O "$out"
-    else
-      wget --quiet "$url" -O "$out"
-    fi
-    return
-  fi
-
-  die "need curl or wget to download release assets"
-}
-
-resolve_tag() {
-  if [ "$VERSION" != "latest" ]; then
-    echo "$VERSION"
-    return
-  fi
-
-  local api_json="${TMP_DIR}/latest.json"
-  download "https://api.github.com/repos/${REPO}/releases/latest" "$api_json"
-  sed -n 's/.*"tag_name":[[:space:]]*"\([^"]\+\)".*/\1/p' "$api_json" | head -n1
-}
-
-verify_checksum() {
-  local tar_file="$1"
-  local checksums="$2"
-  local asset="$3"
-
-  local expected
-  expected="$(grep -E "[[:space:]](dist/)?${asset}$" "$checksums" | awk '{print $1}' | head -n1 || true)"
-  if [ -z "$expected" ]; then
-    warn "skip checksum: ${asset} not found in checksums.txt"
-    return
-  fi
-
-  local actual
-  actual="$(sha256sum "$tar_file" | awk '{print $1}')"
-  [ "$actual" = "$expected" ] || die "checksum mismatch for ${asset}"
 }
 
 read_env_value() {
@@ -208,7 +140,6 @@ ensure_service_group() {
   if getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
     return
   fi
-
   if command -v groupadd >/dev/null 2>&1; then
     as_root groupadd --system "$SERVICE_GROUP"
     return
@@ -217,7 +148,6 @@ ensure_service_group() {
     as_root addgroup --system "$SERVICE_GROUP"
     return
   fi
-
   die "cannot create service group: neither groupadd nor addgroup found"
 }
 
@@ -260,7 +190,6 @@ ensure_service_user() {
 }
 
 ensure_service_user_sudo_group() {
-  # Allow runtime process user to run sudo when explicitly required by module-install flows.
   if ! getent group sudo >/dev/null 2>&1; then
     if command -v groupadd >/dev/null 2>&1; then
       as_root groupadd sudo || true
@@ -425,10 +354,8 @@ assign_random_backend_port() {
 write_config_template() {
   local out="$1"
   cat > "$out" <<'ENV_TPL'
-# Aurora Admin Service env template
-# Fill all required values before install.
-
-APP_HOSTNAME=aurora-admin.local
+# Aurora Admin Service env template (local dev install)
+APP_HOSTNAME=admin.aurora.local
 APP_PORT=3009
 APP_LOG_LEVEL=info
 APP_TIMEZONE=Asia/Ho_Chi_Minh
@@ -467,39 +394,40 @@ REDIS_TLS_INSECURE=false
 TELEGRAM_ENABLE=false
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
-
 ENV_TPL
   chmod 600 "$out"
-}
-
-install_binary() {
-  local tag="$1"
-  local machine_arch="$2"
-  local asset="${APP_NAME}_linux_${machine_arch}.tar.gz"
-  local tar_file="${TMP_DIR}/${asset}"
-  local checksums="${TMP_DIR}/checksums.txt"
-  local base_url="https://github.com/${REPO}/releases/download/${tag}"
-
-  log "download ${asset} (${REPO}@${tag})"
-  download "${base_url}/${asset}" "$tar_file"
-  download "${base_url}/checksums.txt" "$checksums"
-  verify_checksum "$tar_file" "$checksums" "$asset"
-
-  tar -xzf "$tar_file" -C "$TMP_DIR"
-
-  local extracted="${TMP_DIR}/${APP_NAME}_linux_${machine_arch}"
-  [ -f "$extracted" ] || extracted="${TMP_DIR}/${APP_NAME}"
-  [ -f "$extracted" ] || die "binary not found in archive ${asset}"
-
-  as_root mkdir -p "$INSTALL_DIR"
-  as_root install -m 0755 -o root -g root "$extracted" "$BIN_PATH"
 }
 
 install_env_file() {
   local source_env="$1"
   [ -f "$source_env" ] || die "env file not found: ${source_env}"
-
   as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$source_env" "$ENV_FILE"
+}
+
+build_frontend_bundle() {
+  [ -f "${PROJECT_ROOT}/package.json" ] || die "missing package.json in ${PROJECT_ROOT}"
+  [ -f "${PROJECT_ROOT}/vite.config.ts" ] || die "missing vite.config.ts in ${PROJECT_ROOT}"
+
+  log "build frontend bundle (local source)"
+  if [ ! -d "${PROJECT_ROOT}/node_modules" ]; then
+    (cd "$PROJECT_ROOT" && npm ci)
+  fi
+  (cd "$PROJECT_ROOT" && npm run build)
+}
+
+build_backend_binary() {
+  [ -f "${PROJECT_ROOT}/go.mod" ] || die "missing go.mod in ${PROJECT_ROOT}"
+
+  LOCAL_BUILT_BINARY="${TMP_DIR}/${APP_NAME}"
+  log "build backend binary (local source)"
+  (cd "$PROJECT_ROOT" && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$LOCAL_BUILT_BINARY" ./cmd/server)
+  [ -s "$LOCAL_BUILT_BINARY" ] || die "local backend binary is empty: ${LOCAL_BUILT_BINARY}"
+}
+
+install_binary_local() {
+  [ -f "$LOCAL_BUILT_BINARY" ] || die "local built binary not found: ${LOCAL_BUILT_BINARY}"
+  as_root mkdir -p "$INSTALL_DIR"
+  as_root install -m 0755 -o root -g root "$LOCAL_BUILT_BINARY" "$BIN_PATH"
 }
 
 install_tls_materials() {
@@ -654,36 +582,6 @@ nginx_supports_brotli() {
   return 1
 }
 
-render_nginx_template() {
-  local src="$1"
-  local dst="$2"
-  local app_host="$3"
-  local backend_port="$4"
-  local brotli_enabled="0"
-
-  if nginx_supports_brotli; then
-    sed '/^## __BROTLI_BEGIN__$/d; /^## __BROTLI_END__$/d' "$src" > "$dst"
-    log "nginx brotli: enabled"
-    brotli_enabled="1"
-  else
-    sed '/^## __BROTLI_BEGIN__$/,/^## __BROTLI_END__$/d' "$src" > "$dst"
-    log "nginx brotli: not available, fallback to gzip"
-  fi
-
-  sed -i \
-    -e "s|__SERVER_NAME__|${app_host}|g" \
-    -e "s|__BACKEND_PORT__|${backend_port}|g" \
-    -e "s|__TLS_CERT_FILE__|${TLS_CERT_FILE}|g" \
-    -e "s|__TLS_KEY_FILE__|${TLS_KEY_FILE}|g" \
-    -e "s|__TLS_CA_FILE__|${TLS_CA_FILE}|g" \
-    -e "s|__TLS_NGINX_CLIENT_CERT_FILE__|${TLS_NGINX_CLIENT_CERT_FILE}|g" \
-    -e "s|__TLS_NGINX_CLIENT_KEY_FILE__|${TLS_NGINX_CLIENT_KEY_FILE}|g" \
-    -e "s|__NGINX_CACHE_DIR__|${NGINX_CACHE_DIR}|g" \
-    "$dst"
-
-  normalize_nginx_compression "$dst" "$brotli_enabled"
-}
-
 normalize_nginx_compression() {
   local file="$1"
   local brotli_enabled="$2"
@@ -745,34 +643,42 @@ normalize_nginx_compression() {
   mv "$tmp_file" "$file"
 }
 
-ensure_nginx_template_file() {
-  local release_tag="$1"
-  local conf_tmp fetch_url fallback_url
-  conf_tmp="${TMP_DIR}/aurora-admin-nginx.template.conf"
+render_nginx_template() {
+  local src="$1"
+  local dst="$2"
+  local app_host="$3"
+  local backend_port="$4"
+  local brotli_enabled="0"
 
-  if [ -n "$NGINX_TEMPLATE_URL" ]; then
-    log "download nginx template from ${NGINX_TEMPLATE_URL}"
-    download "$NGINX_TEMPLATE_URL" "$conf_tmp"
+  if nginx_supports_brotli; then
+    sed '/^## __BROTLI_BEGIN__$/d; /^## __BROTLI_END__$/d' "$src" > "$dst"
+    log "nginx brotli: enabled"
+    brotli_enabled="1"
   else
-    fetch_url="https://raw.githubusercontent.com/${REPO}/${release_tag}/install/nginx.conf"
-    fallback_url="https://raw.githubusercontent.com/${REPO}/main/install/nginx.conf"
-    log "download nginx template from ${fetch_url}"
-    if ! download "$fetch_url" "$conf_tmp"; then
-      warn "cannot download nginx template from release tag, fallback to main"
-      download "$fallback_url" "$conf_tmp"
-    fi
+    sed '/^## __BROTLI_BEGIN__$/,/^## __BROTLI_END__$/d' "$src" > "$dst"
+    log "nginx brotli: not available, fallback to gzip"
   fi
 
-  [ -s "$conf_tmp" ] || die "downloaded nginx template is empty"
-  NGINX_TEMPLATE_FILE="$conf_tmp"
+  sed -i \
+    -e "s|__SERVER_NAME__|${app_host}|g" \
+    -e "s|__BACKEND_PORT__|${backend_port}|g" \
+    -e "s|__TLS_CERT_FILE__|${TLS_CERT_FILE}|g" \
+    -e "s|__TLS_KEY_FILE__|${TLS_KEY_FILE}|g" \
+    -e "s|__TLS_CA_FILE__|${TLS_CA_FILE}|g" \
+    -e "s|__TLS_NGINX_CLIENT_CERT_FILE__|${TLS_NGINX_CLIENT_CERT_FILE}|g" \
+    -e "s|__TLS_NGINX_CLIENT_KEY_FILE__|${TLS_NGINX_CLIENT_KEY_FILE}|g" \
+    -e "s|__NGINX_CACHE_DIR__|${NGINX_CACHE_DIR}|g" \
+    "$dst"
+
+  normalize_nginx_compression "$dst" "$brotli_enabled"
 }
 
 install_nginx_reverse_proxy() {
-  local release_tag="$1"
   local app_host proxy_server_name backend_port conf_tmp
   ensure_nginx_installed
   ensure_nginx_cache_dir
-  ensure_nginx_template_file "$release_tag"
+
+  [ -f "$NGINX_TEMPLATE_FILE" ] || die "nginx template file not found: ${NGINX_TEMPLATE_FILE}"
 
   app_host="$(read_env_value "APP_HOSTNAME" "$ENV_FILE")"
   [ -n "$app_host" ] || app_host="aurora-admin.local"
@@ -783,7 +689,6 @@ install_nginx_reverse_proxy() {
     backend_port="$(read_env_value "APP_PORT" "$ENV_FILE")"
   fi
   [ -n "$backend_port" ] || die "cannot resolve backend APP_PORT for nginx"
-  [ -f "$NGINX_TEMPLATE_FILE" ] || die "nginx template file not found: ${NGINX_TEMPLATE_FILE}"
 
   conf_tmp="${TMP_DIR}/aurora-admin-nginx.conf"
   render_nginx_template "$NGINX_TEMPLATE_FILE" "$conf_tmp" "$proxy_server_name" "$backend_port"
@@ -798,15 +703,9 @@ install_nginx_reverse_proxy() {
   log "nginx cache dir: ${NGINX_CACHE_DIR}"
 }
 
-install_systemd_service() {
-  local tag="$1"
-  local service_url="https://raw.githubusercontent.com/${REPO}/${tag}/install/aurora-admin.service"
-  local source_service="${TMP_DIR}/aurora-admin.service"
-
-  log "download service template (${REPO}@${tag})"
-  download "$service_url" "$source_service"
-
-  as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$source_service" "$SERVICE_PATH"
+install_systemd_service_local() {
+  [ -f "$SERVICE_TEMPLATE_FILE" ] || die "systemd template not found: ${SERVICE_TEMPLATE_FILE}"
+  as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$SERVICE_TEMPLATE_FILE" "$SERVICE_PATH"
   as_root systemctl daemon-reload
   as_root systemctl enable "$SERVICE_NAME"
 }
@@ -839,34 +738,34 @@ main() {
   if [ "$MODE" = "config" ]; then
     write_config_template "$CONFIG_OUTPUT"
     log "generated config template: ${CONFIG_OUTPUT}"
-    log "next: ./install.sh -f ${CONFIG_OUTPUT}"
+    log "next: ./install.dev.sh -f ${CONFIG_OUTPUT}"
     exit 0
   fi
 
-  [ -n "$INPUT_ENV_FILE" ] || die "missing env file. Use: ./install.sh -f <env_file>"
+  [ -n "$INPUT_ENV_FILE" ] || die "missing env file. Use: ./install.dev.sh -f <env_file>"
 
-  require_cmd tar
-  require_cmd sha256sum
+  require_cmd go
+  require_cmd npm
   require_cmd systemctl
   require_cmd openssl
+  require_cmd awk
+  require_cmd sed
 
   TMP_DIR="$(mktemp -d)"
-  local machine_arch tag
-  machine_arch="$(arch)"
-  tag="$(resolve_tag)"
-  [ -n "$tag" ] || die "cannot resolve release tag"
 
   ensure_service_user
   ensure_service_user_sudo_group
   ensure_admin_ssh_keypair
   ensure_tls_dir
-  install_binary "$tag" "$machine_arch"
   install_env_file "$INPUT_ENV_FILE"
   assign_random_backend_port
+  build_frontend_bundle
+  build_backend_binary
+  install_binary_local
   install_tls_materials "$ENV_FILE"
   preflight_tls_materials
-  install_systemd_service "$tag"
-  install_nginx_reverse_proxy "$tag"
+  install_systemd_service_local
+  install_nginx_reverse_proxy
   restart_service
   delete_source_env_if_needed "$INPUT_ENV_FILE"
 
@@ -877,8 +776,7 @@ main() {
   log "nginx config: ${NGINX_CONF_FILE}"
   log "backend app_port: ${BACKEND_PORT}"
   log "env: ${ENV_FILE}"
-  log "ui: embedded in binary"
-  log "release: ${REPO}@${tag}"
+  log "source: local (${PROJECT_ROOT})"
   log "check: sudo systemctl status ${SERVICE_NAME} --no-pager"
 }
 

@@ -17,7 +17,12 @@ const (
 	TokenSecretLegacyPrefix = "/aurora/token-secret"
 	CertStorePrefix         = "/cert-store"
 
-	RuntimeSchemaPrefix = "/runtime/postgresql/schema"
+	RuntimeSchemaPrefix              = "/runtime/postgresql/schema"
+	RuntimeAppPortPrefix             = "/runtime/app/port"
+	RuntimeHostsPrefix               = "/runtime/hosts"
+	RuntimeAgentPrefix               = "/runtime/agent/nodes"
+	RuntimeAgentBootstrapTokenPrefix = "/runtime/agent/bootstrap_tokens"
+	RuntimeAgentRevocationPrefix     = "/runtime/agent/revocations"
 
 	APIKeyCurrentVersionPath       = "/apikey/current_version"
 	APIKeyCurrentRotatedAtPath     = "/apikey/current_rotated_at"
@@ -41,6 +46,22 @@ func RuntimeSchemaKey(moduleName string) string {
 	return RuntimeSchemaPrefix + "/" + name
 }
 
+func RuntimeAppPortKey(moduleName string) string {
+	name := strings.Trim(strings.TrimSpace(moduleName), "/")
+	if name == "" {
+		return RuntimeAppPortPrefix
+	}
+	return RuntimeAppPortPrefix + "/" + name
+}
+
+func RuntimeHostEntryKey(hostname string) string {
+	host := strings.Trim(strings.TrimSpace(hostname), "/")
+	if host == "" {
+		return RuntimeHostsPrefix
+	}
+	return RuntimeHostsPrefix + "/" + host
+}
+
 func RuntimeStoreKey(key string) string {
 	trimmed := strings.TrimSpace(key)
 	if trimmed == "" {
@@ -50,6 +71,43 @@ func RuntimeStoreKey(key string) string {
 		return trimmed
 	}
 	return RuntimePrefix + "/" + strings.Trim(trimmed, "/")
+}
+
+func RuntimeAgentNodeKey(agentID string, suffix string) string {
+	id := strings.Trim(strings.TrimSpace(agentID), "/")
+	base := RuntimeAgentPrefix
+	if id != "" {
+		base = base + "/" + id
+	}
+	trimmedSuffix := strings.Trim(strings.TrimSpace(suffix), "/")
+	if trimmedSuffix == "" {
+		return base
+	}
+	return base + "/" + trimmedSuffix
+}
+
+func RuntimeAgentBootstrapTokenKey(tokenHash string) string {
+	hash := strings.Trim(strings.TrimSpace(tokenHash), "/")
+	if hash == "" {
+		return RuntimeAgentBootstrapTokenPrefix
+	}
+	return RuntimeAgentBootstrapTokenPrefix + "/" + hash
+}
+
+func RuntimeAgentRevocationKey(serialHex string) string {
+	serial := strings.Trim(strings.TrimSpace(strings.ToUpper(serialHex)), "/")
+	if serial == "" {
+		return RuntimeAgentRevocationPrefix
+	}
+	return RuntimeAgentRevocationPrefix + "/" + serial
+}
+
+func RuntimeAgentMetricsPolicyKey(agentID string, suffix string) string {
+	return RuntimeAgentNodeKey(agentID, "metrics/policy/"+strings.Trim(strings.TrimSpace(suffix), "/"))
+}
+
+func RuntimeAgentMetricsDataKey(agentID string, suffix string) string {
+	return RuntimeAgentNodeKey(agentID, "metrics/data/"+strings.Trim(strings.TrimSpace(suffix), "/"))
 }
 
 func SharedCORSStoreKey(key string) string {

@@ -19,6 +19,7 @@ type AppCfg struct {
 	TLSCert  string
 	TLSKey   string
 	TLSCA    string
+	TLSCAKey string
 }
 
 type EtcdCfg struct {
@@ -135,6 +136,7 @@ func LoadConfig() *Config {
 			TLSCert:  "/etc/aurora/certs/admin.crt",
 			TLSKey:   "/etc/aurora/certs/admin.key",
 			TLSCA:    "/etc/aurora/certs/ca.crt",
+			TLSCAKey: getEnv("APP_TLS_CA_KEY_FILE", "/etc/aurora/certs/ca.key"),
 		},
 		Etcd: EtcdCfg{
 			Endpoints:            getEnvAsSlice("ETCD_ENDPOINTS", []string{"localhost:2379"}),

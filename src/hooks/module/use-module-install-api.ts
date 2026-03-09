@@ -5,17 +5,24 @@ export type ModuleInstallScope = "remote";
 export type ModuleInstallPayload = {
   module_name: string;
   scope: ModuleInstallScope;
+  agent_id?: string;
   app_host: string;
   app_port?: number;
   endpoint?: string;
   install_command?: string;
-  ssh_host?: string;
-  ssh_port?: number;
-  ssh_username?: string;
-  ssh_password?: string;
   sudo_password?: string;
-  ssh_private_key?: string;
-  ssh_host_key_fingerprint?: string;
+};
+
+export type ModuleInstallAgent = {
+  agent_id: string;
+  status: string;
+  hostname: string;
+  ip_address: string;
+  agent_grpc_endpoint: string;
+  last_seen_at: string;
+  host: string;
+  port: number;
+  username: string;
 };
 
 export type ModuleInstallResult = {
@@ -81,6 +88,52 @@ function toStringList(v: unknown): string[] {
   return v
     .map((item) => toStringValue(item).trim())
     .filter((item) => item.length > 0);
+}
+
+function parseModuleInstallAgent(raw: unknown): ModuleInstallAgent {
+  const row = (raw ?? {}) as Record<string, unknown>;
+  return {
+    agent_id: toStringValue(row.agent_id),
+    status: toStringValue(row.status),
+    hostname: toStringValue(row.hostname),
+    ip_address: toStringValue(row.ip_address),
+    agent_grpc_endpoint: toStringValue(row.agent_grpc_endpoint),
+    last_seen_at: toStringValue(row.last_seen_at),
+    host: toStringValue(row.host),
+    port: toNumberValue(row.port),
+    username: toStringValue(row.username),
+  };
+}
+
+export async function listModuleInstallAgents(): Promise<ModuleInstallAgent[]> {
+  const baseURL = resolveAdminBaseURL();
+  const path = "/api/v1/modules/install/agents";
+  const url = baseURL ? new URL(path, baseURL).toString() : path;
+
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+    },
+    credentials: "include",
+  });
+
+  const text = await res.text();
+  let parsed: ModuleInstallApiResponse | null = null;
+  try {
+    parsed = JSON.parse(text) as ModuleInstallApiResponse;
+  } catch {
+    parsed = null;
+  }
+
+  if (!res.ok) {
+    const detail = toStringValue(parsed?.message ?? parsed?.error) || toSingleLine(text);
+    throw new Error(`Load install agents failed (HTTP ${res.status} ${res.statusText}): ${detail || "empty response"}`);
+  }
+
+  const body = (parsed?.data ?? {}) as Record<string, unknown>;
+  const rows = Array.isArray(body.items) ? body.items : [];
+  return rows.map((item) => parseModuleInstallAgent(item));
 }
 
 function parseModuleInstallResult(raw: unknown): ModuleInstallResult {

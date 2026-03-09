@@ -11,8 +11,14 @@ import (
 type RuntimeConfigRepository interface {
 	Get(ctx context.Context, key string) (string, bool, error)
 	GetMany(ctx context.Context, keys []string) (map[string]string, error)
+	ListByPrefix(ctx context.Context, prefix string) ([]RuntimeConfigKV, error)
 	Upsert(ctx context.Context, key string, value string) error
 	Delete(ctx context.Context, key string) error
+}
+
+type RuntimeConfigKV struct {
+	Key   string
+	Value string
 }
 
 type EtcdRuntimeConfigRepository struct {
@@ -109,6 +115,52 @@ func (r *EtcdRuntimeConfigRepository) Upsert(ctx context.Context, key string, va
 	}
 	_, err = r.etcd.Put(ctx, fullKey, strings.TrimSpace(value))
 	return err
+}
+
+func (r *EtcdRuntimeConfigRepository) ListByPrefix(ctx context.Context, prefix string) ([]RuntimeConfigKV, error) {
+	if r == nil || r.etcd == nil {
+		return nil, errorvar.ErrRuntimeConfigRepositoryNil
+	}
+
+	cleanPrefix := strings.TrimSpace(prefix)
+	if cleanPrefix == "" {
+		return nil, errorvar.ErrRuntimeConfigKeyInvalid
+	}
+
+	fullPrefix := cleanPrefix
+	if !strings.HasPrefix(cleanPrefix, "/") {
+		trimmed := strings.Trim(cleanPrefix, "/")
+		if trimmed == "" {
+			return nil, errorvar.ErrRuntimeConfigKeyInvalid
+		}
+		prefixBase := strings.TrimRight(strings.TrimSpace(r.prefix), "/")
+		if prefixBase == "" {
+			return nil, errorvar.ErrRuntimeConfigKeyInvalid
+		}
+		fullPrefix = prefixBase + "/" + trimmed
+	}
+
+	resp, err := r.etcd.Get(
+		ctx,
+		fullPrefix,
+		clientv3.WithPrefix(),
+		clientv3.WithSort(clientv3.SortByKey, clientv3.SortAscend),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	items := make([]RuntimeConfigKV, 0, len(resp.Kvs))
+	for _, kv := range resp.Kvs {
+		if kv == nil {
+			continue
+		}
+		items = append(items, RuntimeConfigKV{
+			Key:   strings.TrimSpace(string(kv.Key)),
+			Value: strings.TrimSpace(string(kv.Value)),
+		})
+	}
+	return items, nil
 }
 
 func (r *EtcdRuntimeConfigRepository) Delete(ctx context.Context, key string) error {

@@ -13,27 +13,24 @@ import (
 )
 
 const (
-	ModuleInstallScopeLocal  = "local"
 	ModuleInstallScopeRemote = "remote"
 
 	schemaDigitsCount = 10
 )
 
 type ModuleInstallRequest struct {
-	ModuleName     string
-	Scope          string
-	AppHost        string
-	AppPort        int32
-	Endpoint       string
-	InstallCommand string
-
-	SSHHost               string
-	SSHPort               int32
-	SSHUsername           string
-	SSHPassword           *string
-	SudoPassword          *string
-	SSHPrivateKey         *string
-	SSHHostKeyFingerprint *string
+	ModuleName        string
+	Scope             string
+	AgentID           string
+	AgentGRPCEndpoint string
+	AppHost           string
+	AppPort           int32
+	Endpoint          string
+	InstallCommand    string
+	TargetHost        string
+	TargetPort        int32
+	TargetUser        string
+	SudoPassword      *string
 }
 
 type ModuleInstallResult struct {
@@ -54,14 +51,13 @@ type ModuleInstallResult struct {
 }
 
 type moduleInstallTarget struct {
-	Scope              string
-	Username           string
-	Host               string
-	Port               int32
-	Password           *string
-	SudoPassword       *string
-	PrivateKey         *string
-	HostKeyFingerprint *string
+	Scope             string
+	AgentID           string
+	AgentGRPCEndpoint string
+	Username          string
+	Host              string
+	Port              int32
+	SudoPassword      *string
 }
 
 type hostsEntry struct {
@@ -81,6 +77,10 @@ type ModuleInstallService struct {
 	certStorePrefix string
 	databaseURL     string
 
+	agentRPCCAPath         string
+	agentRPCClientCertPath string
+	agentRPCClientKeyPath  string
+
 	installScriptURLByModule map[string]string
 }
 
@@ -92,6 +92,9 @@ func NewModuleInstallService(
 	certStoreRepo repository.CertStoreRepository,
 	certStorePrefix string,
 	databaseURL string,
+	agentRPCCAPath string,
+	agentRPCClientCertPath string,
+	agentRPCClientKeyPath string,
 	installScriptURLByModule map[string]string,
 ) *ModuleInstallService {
 	normalizedScriptURLs := make(map[string]string, len(installScriptURLByModule))
@@ -103,14 +106,19 @@ func NewModuleInstallService(
 		normalizedScriptURLs[canonicalName] = strings.TrimSpace(scriptURL)
 	}
 
-	return &ModuleInstallService{
+	svc := &ModuleInstallService{
 		endpointRepo:             endpointRepo,
 		runtimeRepo:              runtimeRepo,
 		certStoreRepo:            certStoreRepo,
 		certStorePrefix:          strings.TrimSpace(certStorePrefix),
 		databaseURL:              strings.TrimSpace(databaseURL),
+		agentRPCCAPath:           strings.TrimSpace(agentRPCCAPath),
+		agentRPCClientCertPath:   strings.TrimSpace(agentRPCClientCertPath),
+		agentRPCClientKeyPath:    strings.TrimSpace(agentRPCClientKeyPath),
 		installScriptURLByModule: normalizedScriptURLs,
 	}
+	configureAgentRPCDialTLS(svc.agentRPCCAPath, svc.agentRPCClientCertPath, svc.agentRPCClientKeyPath)
+	return svc
 }
 
 func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleInstallRequest, logFn InstallLogFn) (result *ModuleInstallResult, err error) {
@@ -132,6 +140,9 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 	if appHost == "" {
 		return nil, fmt.Errorf("app_host is required")
 	}
+	if hydrateErr := s.hydrateInstallTargetFromAgent(ctx, &req, logFn); hydrateErr != nil {
+		return nil, hydrateErr
+	}
 	endpoint, endpointPort, err := resolveInstallEndpoint(scope, appHost, req.AppPort, req.Endpoint)
 	if err != nil {
 		return nil, err
@@ -146,6 +157,17 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 	if preflightErr := ensureTargetInstallPrivilege(ctx, target, logFn); preflightErr != nil {
 		logInstall(logFn, "preflight", "[error] %v", preflightErr)
 		return nil, preflightErr
+	}
+	resolvedPort, portErr := resolveInstallPortForTarget(ctx, target, endpointPort, req.AppPort > 0)
+	if portErr != nil {
+		logInstall(logFn, "install", "[error] %v", portErr)
+		return nil, portErr
+	}
+	if resolvedPort != endpointPort {
+		logInstall(logFn, "install", "auto-selected available app_port=%d (previous=%d busy)", resolvedPort, endpointPort)
+		endpointPort = resolvedPort
+	} else {
+		logInstall(logFn, "install", "confirmed app_port=%d is available on target", endpointPort)
 	}
 
 	result = &ModuleInstallResult{
@@ -207,6 +229,10 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 		return nil, errorvar.ErrModuleInstallerMissing
 	}
 
+	if preseedErr := s.preseedInstallRouting(ctx, moduleName, target, endpoint, endpointPort, result, rollbacks, logFn); preseedErr != nil {
+		return nil, preseedErr
+	}
+
 	tlsBundle, tlsErr := installModuleTLSOnTarget(ctx, target, moduleName, appHost, endpoint, logFn)
 	if tlsErr != nil {
 		logInstall(logFn, "tls", "[error] %v", tlsErr)
@@ -219,10 +245,10 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 		command,
 		target,
 		func(line string) {
-			logInstall(logFn, "ssh", "%s", line)
+			logInstall(logFn, "agent", "%s", line)
 		},
 		func(line string) {
-			logInstall(logFn, "ssh", "%s", line)
+			logInstall(logFn, "agent", "%s", line)
 		},
 	)
 	result.InstallExecuted = true
@@ -284,33 +310,53 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 		logInstall(logFn, "hosts", "[warn] %s", warning)
 	}
 
+	if err := s.seedHostRoutingEntry(ctx, hostEntryHost, targetAddr); err != nil {
+		logInstall(logFn, "hosts", "[error] %v", err)
+		return nil, fmt.Errorf("seed host routing failed: %w", err)
+	}
+	hostRoutingKey := keycfg.RuntimeHostEntryKey(hostEntryHost)
+	logInstall(logFn, "hosts", "seeded host routing key=%s", hostRoutingKey)
+	rollbacks.Add("hosts", func(rollbackCtx context.Context) error {
+		deleteScript := buildHostsDeleteCommand(hostEntryHost, target.SudoPassword)
+		runCtx, cancel := context.WithTimeout(rollbackCtx, 20*time.Second)
+		_, _, runErr := runCommandOnTarget(runCtx, target, deleteScript, 20*time.Second, nil, nil)
+		cancel()
+		if runErr != nil {
+			return fmt.Errorf("rollback hosts file cleanup failed: %w", runErr)
+		}
+
+		if s.runtimeRepo == nil {
+			return nil
+		}
+		deleteCtx, deleteCancel := context.WithTimeout(rollbackCtx, 10*time.Second)
+		deleteErr := s.runtimeRepo.Delete(deleteCtx, hostRoutingKey)
+		deleteCancel()
+		if deleteErr != nil {
+			return fmt.Errorf("rollback runtime host key cleanup failed: %w", deleteErr)
+		}
+		return nil
+	})
+
+	agentBroadcastUpdated, agentBroadcastWarnings := s.broadcastHostsToConnectedAgents(ctx, hostEntries, target.AgentID)
+	for _, item := range agentBroadcastUpdated {
+		result.HostsUpdated = append(result.HostsUpdated, "agent:"+item)
+	}
+	for _, warning := range agentBroadcastWarnings {
+		result.Warnings = append(result.Warnings, warning)
+		logInstall(logFn, "hosts", "[warn] %s", warning)
+	}
+
+	if nginxErr := ensureModuleNginxProxyOnTarget(ctx, target, moduleName, appHost, endpointPort, logFn); nginxErr != nil {
+		logInstall(logFn, "nginx", "[error] %v", nginxErr)
+		return nil, fmt.Errorf("configure nginx proxy failed: %w", nginxErr)
+	}
+
 	if seedErr := s.seedModuleTLSBundle(ctx, moduleName, tlsBundle); seedErr != nil {
 		logInstall(logFn, "tls", "[error] %v", seedErr)
 		return nil, fmt.Errorf("seed module tls bundle failed: %w", seedErr)
 	}
 	s.addModuleTLSRollbackStep(rollbacks, moduleName)
 	logInstall(logFn, "tls", "seeded module tls bundle into cert store")
-
-	endpointValue := encodeEndpointValue(target, endpoint)
-	result.EndpointValue = endpointValue
-	logInstall(logFn, "endpoint", "upsert endpoint key=%s", keycfg.EndpointKey(moduleName))
-	if err := s.endpointRepo.Upsert(ctx, moduleName, endpointValue); err != nil {
-		logInstall(logFn, "endpoint", "[error] %v", err)
-		return nil, err
-	}
-	rollbacks.Add("endpoint", func(rollbackCtx context.Context) error {
-		if s.endpointRepo == nil {
-			return nil
-		}
-		cleanupCtx, cancel := context.WithTimeout(rollbackCtx, 10*time.Second)
-		deleteErr := s.endpointRepo.Delete(cleanupCtx, moduleName)
-		cancel()
-		if deleteErr != nil {
-			return fmt.Errorf("endpoint cleanup failed (%s): %w", moduleName, deleteErr)
-		}
-		return nil
-	})
-	logInstall(logFn, "endpoint", "endpoint updated")
 
 	logInstall(logFn, "install", "[done] module install completed module=%s", moduleName)
 	rollbacks.Clear()

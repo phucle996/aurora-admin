@@ -4,7 +4,9 @@ import (
 	keycfg "admin/internal/key"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -79,6 +81,16 @@ func SeedRuntimeToEtcdIfAbsent(ctx context.Context, cli *clientv3.Client, cfg *C
 	}
 	if err := seedValuesIfAbsent(ctx, cli, runtimeValues); err != nil {
 		return fmt.Errorf("seed runtime config failed: %w", err)
+	}
+
+	agentBootstrapToken := strings.TrimSpace(getEnv("AURORA_AGENT_BOOTSTRAP_TOKEN", ""))
+	if agentBootstrapToken != "" {
+		clusterPolicy := strings.TrimSpace(getEnv("AURORA_AGENT_BOOTSTRAP_CLUSTER", "*"))
+		sum := sha256.Sum256([]byte(agentBootstrapToken))
+		tokenKey := keycfg.RuntimeAgentBootstrapTokenKey(hex.EncodeToString(sum[:]))
+		if err := putIfAbsentCAS(ctx, cli, tokenKey, clusterPolicy); err != nil {
+			return fmt.Errorf("seed agent bootstrap token failed: %w", err)
+		}
 	}
 
 	if endpoint := buildEndpointFromHost(cfg.App.HostName); endpoint != "" {

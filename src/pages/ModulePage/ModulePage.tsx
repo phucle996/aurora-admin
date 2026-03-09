@@ -2,10 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 
-import type { SSHInputPrompt } from "@/components/ssh-live-terminal";
 import {
   installModuleStream,
+  listModuleInstallAgents,
   reinstallModuleCertStream,
+  type ModuleInstallAgent,
   type ModuleInstallResult,
   type ModuleInstallScope,
   type ModuleReinstallCertResult,
@@ -18,17 +19,12 @@ import { buildModuleStatusCards } from "./sections/module-page-mapper";
 import { ModulePageContent } from "./sections/module-page-content";
 import type { ModuleStatusCard } from "./sections/module-page-types";
 
-function needsTerminalSudoPassword(message: string): boolean {
-  const lowered = message.toLowerCase();
-  return (
-    lowered.includes("provide sudo_password") ||
-    lowered.includes("provide sudo password") ||
-    lowered.includes("non-interactive sudo") ||
-    lowered.includes("privilege=sudo-denied")
-  );
-}
+const installLogShellPrompt = "aurora@installer:~$";
 
-type InstallPromptResolver = (value: string) => void;
+function formatInstallLogLine(line: string): string {
+  const timeValue = new Date().toLocaleTimeString("en-GB", { hour12: false });
+  return `${timeValue} ${installLogShellPrompt} ${line}`;
+}
 
 export default function ModulePage() {
   const { resolvedTheme } = useTheme();
@@ -46,12 +42,9 @@ export default function ModulePage() {
   const [installScope] = useState<ModuleInstallScope>("remote");
   const [appHost, setAppHost] = useState("");
   const [appPort, setAppPort] = useState("");
-  const [sshHost, setSshHost] = useState("");
-  const [sshPort, setSshPort] = useState("22");
-  const [sshUsername, setSshUsername] = useState("aurora");
-  const [sshPassword, setSshPassword] = useState("");
-  const [sshPrivateKey, setSshPrivateKey] = useState("");
-  const [sshHostKeyFingerprint, setSshHostKeyFingerprint] = useState("");
+  const [selectedAgentID, setSelectedAgentID] = useState("");
+  const [installAgents, setInstallAgents] = useState<ModuleInstallAgent[]>([]);
+  const [installAgentsLoading, setInstallAgentsLoading] = useState(false);
   const [installLogDialogOpen, setInstallLogDialogOpen] = useState(false);
   const [installLogs, setInstallLogs] = useState<string[]>([]);
   const [installRunning, setInstallRunning] = useState(false);
@@ -60,15 +53,11 @@ export default function ModulePage() {
   >(null);
   const [installError, setInstallError] = useState("");
   const [logDialogTitle, setLogDialogTitle] = useState(
-    "Module Install SSH Logs",
+    "Module Install Logs",
   );
   const [logDialogDescription, setLogDialogDescription] = useState(
     "Log chi tiet theo tung stage de debug install flow.",
   );
-  const [installInputPrompt, setInstallInputPrompt] =
-    useState<SSHInputPrompt | null>(null);
-  const [installPromptResolver, setInstallPromptResolver] =
-    useState<InstallPromptResolver | null>(null);
 
   const isDark = resolvedTheme !== "light";
   const textPrimary = isDark ? "text-white" : "text-slate-900";
@@ -115,40 +104,33 @@ export default function ModulePage() {
     setInstallTarget(item);
     setAppHost(defaultHost);
     setAppPort("");
-    setSshHost("");
-    setSshPort("22");
-    setSshUsername("aurora");
-    setSshPassword("");
-    setSshPrivateKey("");
-    setSshHostKeyFingerprint("");
+    setSelectedAgentID("");
+    setInstallAgents([]);
+    setInstallAgentsLoading(true);
     setInstallDialogOpen(true);
+
+    void listModuleInstallAgents()
+      .then((items) => {
+        setInstallAgents(items);
+        if (items.length > 0) {
+          const connected = items.find((agent) => agent.status === "connected");
+          setSelectedAgentID((connected ?? items[0]).agent_id);
+        }
+      })
+      .catch((err) => {
+        const message =
+          err instanceof Error && err.message.trim()
+            ? err.message
+            : "Khong the tai danh sach agent";
+        toast.error(message);
+      })
+      .finally(() => {
+        setInstallAgentsLoading(false);
+      });
   };
 
   const appendInstallLog = (line: string) => {
-    setInstallLogs((prev) => [...prev, line]);
-  };
-
-  const requestSudoPasswordInTerminal = (promptText: string): Promise<string> => {
-    return new Promise((resolve) => {
-      const promptID = `${Date.now()}-${Math.random()
-        .toString(36)
-        .slice(2, 8)}`;
-      setInstallPromptResolver(() => resolve);
-      setInstallInputPrompt({
-        id: promptID,
-        prompt: promptText,
-        maskInput: true,
-      });
-    });
-  };
-
-  const handleInstallPromptSubmit = (value: string) => {
-    const resolve = installPromptResolver;
-    setInstallPromptResolver(null);
-    setInstallInputPrompt(null);
-    if (resolve) {
-      resolve(value);
-    }
+    setInstallLogs((prev) => [...prev, formatInstallLogLine(line)]);
   };
 
   const handleInstall = async () => {
@@ -176,91 +158,42 @@ export default function ModulePage() {
       }
     }
 
-    if (!sshHost.trim() || !sshUsername.trim() || !sshHostKeyFingerprint.trim()) {
-      toast.error("Remote install can ssh host, username va host key fingerprint");
+    if (!selectedAgentID.trim()) {
+      toast.error("Hay chon agent de install");
       return;
     }
 
     setInstallSubmitting(true);
     setInstallDialogOpen(false);
     setInstallLogDialogOpen(true);
-    setLogDialogTitle("Module Install SSH Logs");
+    setLogDialogTitle("Module Install Logs");
     setLogDialogDescription("Log chi tiet theo tung stage de debug install flow.");
     setInstallRunning(true);
     setInstallResult(null);
     setInstallError("");
     setInstallLogs([]);
-    setInstallInputPrompt(null);
-    setInstallPromptResolver(null);
 
     try {
-      const doInstall = async (sudoPassword?: string) => {
-        return installModuleStream(
-          {
-            module_name: moduleName,
-            scope: installScope,
-            app_host: normalizedAppHost,
-            app_port: normalizedAppPort
-              ? Number.parseInt(normalizedAppPort, 10)
-              : undefined,
-            ssh_host: sshHost.trim() || undefined,
-            ssh_port: Number.parseInt(sshPort.trim(), 10) || 22,
-            ssh_username: sshUsername.trim() || undefined,
-            ssh_password: sshPassword.trim() || undefined,
-            sudo_password: sudoPassword,
-            ssh_private_key: sshPrivateKey.trim() || undefined,
-            ssh_host_key_fingerprint: sshHostKeyFingerprint.trim() || undefined,
-          },
-          {
-            onLog: (stage, message) => {
-              if (stage === "ssh") {
-                appendInstallLog(message);
-                return;
-              }
-              appendInstallLog(`[${stage}] ${message}`);
-            },
-          },
-        );
-      };
-
-      let result: ModuleInstallResult | null = null;
-      let sudoPassword: string | undefined;
-      let askedSudoPassword = false;
-
-      for (;;) {
-        try {
-          result = await doInstall(sudoPassword);
-          break;
-        } catch (err) {
-          const message =
-            err instanceof Error && err.message.trim()
-              ? err.message
-              : "Install module that bai";
-          if (!askedSudoPassword && needsTerminalSudoPassword(message)) {
-            askedSudoPassword = true;
-            appendInstallLog(
-              "[sudo] password required. Enter password in terminal then press Enter.",
-            );
-            let typed = "";
-            for (;;) {
-              typed = await requestSudoPasswordInTerminal("[sudo] Password: ");
-              if (typed.trim()) {
-                break;
-              }
-              appendInstallLog("[sudo] empty password, please enter again.");
+      const result = await installModuleStream(
+        {
+          module_name: moduleName,
+          scope: installScope,
+          agent_id: selectedAgentID.trim(),
+          app_host: normalizedAppHost,
+          app_port: normalizedAppPort
+            ? Number.parseInt(normalizedAppPort, 10)
+            : undefined,
+        },
+        {
+          onLog: (stage, message) => {
+            if (stage === "agent") {
+              appendInstallLog(message);
+              return;
             }
-            sudoPassword = typed;
-            appendInstallLog("[sudo] retry install with provided sudo password");
-            continue;
-          }
-          throw err;
-        }
-      }
-
-      if (!result) {
-        throw new Error("Install result is empty");
-      }
-
+            appendInstallLog(`[${stage}] ${message}`);
+          },
+        },
+      );
       setInstallResult(result);
       if (result.warnings.length > 0) {
         toast.warning(result.warnings.join(" | "));
@@ -277,12 +210,6 @@ export default function ModulePage() {
       appendInstallLog(`[error] ${message}`);
       toast.error(message);
     } finally {
-      const resolvePrompt = installPromptResolver;
-      if (typeof resolvePrompt === "function") {
-        resolvePrompt("");
-        setInstallPromptResolver(null);
-      }
-      setInstallInputPrompt(null);
       setInstallSubmitting(false);
       setInstallRunning(false);
     }
@@ -306,8 +233,6 @@ export default function ModulePage() {
     setInstallResult(null);
     setInstallError("");
     setInstallLogs([]);
-    setInstallInputPrompt(null);
-    setInstallPromptResolver(null);
 
     try {
       const result = await reinstallModuleCertStream(
@@ -316,7 +241,7 @@ export default function ModulePage() {
         },
         {
           onLog: (stage, message) => {
-            if (stage === "ssh") {
+            if (stage === "agent") {
               appendInstallLog(message);
               return;
             }
@@ -370,21 +295,13 @@ export default function ModulePage() {
         installTarget={installTarget}
         appHost={appHost}
         appPort={appPort}
-        sshHost={sshHost}
-        sshPort={sshPort}
-        sshUsername={sshUsername}
-        sshPassword={sshPassword}
-        sshPrivateKey={sshPrivateKey}
-        sshHostKeyFingerprint={sshHostKeyFingerprint}
+        selectedAgentID={selectedAgentID}
+        installAgents={installAgents}
+        installAgentsLoading={installAgentsLoading}
         onOpenChange={setInstallDialogOpen}
         onAppHostChange={setAppHost}
         onAppPortChange={setAppPort}
-        onSshHostChange={setSshHost}
-        onSshPortChange={setSshPort}
-        onSshUsernameChange={setSshUsername}
-        onSshPasswordChange={setSshPassword}
-        onSshPrivateKeyChange={setSshPrivateKey}
-        onSshHostKeyFingerprintChange={setSshHostKeyFingerprint}
+        onSelectedAgentIDChange={setSelectedAgentID}
         onInstall={handleInstall}
       />
 
@@ -396,8 +313,6 @@ export default function ModulePage() {
         errorMessage={installError}
         title={logDialogTitle}
         description={logDialogDescription}
-        inputPrompt={installInputPrompt}
-        onInputSubmit={handleInstallPromptSubmit}
         onOpenChange={setInstallLogDialogOpen}
       />
     </main>

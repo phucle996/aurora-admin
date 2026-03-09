@@ -153,7 +153,8 @@ func buildServerTLSConfig(cfg config.AppCfg) (*tls.Config, error) {
 			return nil, fmt.Errorf("invalid tls ca pem")
 		}
 		tlsCfg.ClientCAs = pool
-		tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
+		// Allow first-time agent bootstrap over one-way TLS; sensitive RPCs still enforce mTLS in handler.
+		tlsCfg.ClientAuth = tls.VerifyClientCertIfGiven
 	} else {
 		return nil, fmt.Errorf("tls requires app tls ca file for mTLS")
 	}

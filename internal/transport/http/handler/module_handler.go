@@ -105,17 +105,12 @@ func (h *EnabledModuleHandler) Install(c *gin.Context) {
 	result, err := h.InstallSv.InstallWithLog(ctx, installsvc.ModuleInstallRequest{
 		ModuleName:            moduleName,
 		Scope:                 req.Scope,
+		AgentID:               req.AgentID,
 		AppHost:               req.AppHost,
 		AppPort:               req.AppPort,
 		Endpoint:              req.Endpoint,
 		InstallCommand:        req.InstallCommand,
-		SSHHost:               req.SSHHost,
-		SSHPort:               req.SSHPort,
-		SSHUsername:           req.SSHUsername,
-		SSHPassword:           normalizeOptionalSecret(req.SSHPassword),
 		SudoPassword:          normalizeOptionalSecret(req.SudoPassword),
-		SSHPrivateKey:         normalizeOptionalSecret(req.SSHPrivateKey),
-		SSHHostKeyFingerprint: normalizeOptionalSecret(req.SSHHostKeyFingerprint),
 	}, nil)
 	if err != nil {
 		switch {
@@ -218,17 +213,12 @@ func (h *EnabledModuleHandler) InstallStream(c *gin.Context) {
 	result, err := h.InstallSv.InstallWithLog(ctx, installsvc.ModuleInstallRequest{
 		ModuleName:            moduleName,
 		Scope:                 req.Scope,
+		AgentID:               req.AgentID,
 		AppHost:               req.AppHost,
 		AppPort:               req.AppPort,
 		Endpoint:              req.Endpoint,
 		InstallCommand:        req.InstallCommand,
-		SSHHost:               req.SSHHost,
-		SSHPort:               req.SSHPort,
-		SSHUsername:           req.SSHUsername,
-		SSHPassword:           normalizeOptionalSecret(req.SSHPassword),
 		SudoPassword:          normalizeOptionalSecret(req.SudoPassword),
-		SSHPrivateKey:         normalizeOptionalSecret(req.SSHPrivateKey),
-		SSHHostKeyFingerprint: normalizeOptionalSecret(req.SSHHostKeyFingerprint),
 	}, func(stage, message string) {
 		_ = emitEvent("log", stage, message, nil)
 	})
@@ -244,6 +234,39 @@ func (h *EnabledModuleHandler) InstallStream(c *gin.Context) {
 		return
 	}
 	_ = emitEvent("result", "service", "module install completed", buildModuleInstallResponse(*result))
+}
+
+func (h *EnabledModuleHandler) InstallAgents(c *gin.Context) {
+	if h == nil || h.InstallSv == nil {
+		response.RespondServiceUnavailable(c, "module install service unavailable")
+		return
+	}
+
+	items, err := h.InstallSv.ListInstallAgents(c.Request.Context())
+	if err != nil {
+		response.RespondInternalError(c, err.Error())
+		return
+	}
+
+	output := make([]resdto.ModuleInstallAgent, 0, len(items))
+	for _, item := range items {
+		output = append(output, resdto.ModuleInstallAgent{
+			AgentID:           item.AgentID,
+			Status:            item.Status,
+			Hostname:          item.Hostname,
+			IPAddress:         item.IPAddress,
+			AgentGRPCEndpoint: item.AgentGRPCEndpoint,
+			LastSeenAt:        item.LastSeenAt,
+			Host:              item.Host,
+			Port:              item.Port,
+			Username:          item.Username,
+		})
+	}
+
+	response.RespondSuccess(c, gin.H{
+		"items": output,
+		"count": len(output),
+	}, "module install agent list")
 }
 
 func (h *EnabledModuleHandler) ReinstallCert(c *gin.Context) {

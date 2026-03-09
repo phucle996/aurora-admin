@@ -114,7 +114,7 @@ func (s *ModuleInstallService) resolveModuleTargetByEndpoint(
 			}
 			target.Scope = normalizeScope(target.Scope)
 			if target.Scope == "" {
-				target.Scope = ModuleInstallScopeLocal
+				target.Scope = ModuleInstallScopeRemote
 			}
 			if target.Port <= 0 || target.Port > 65535 {
 				target.Port = 22
@@ -131,20 +131,7 @@ func (s *ModuleInstallService) resolveModuleTargetByEndpoint(
 			return target, endpoint, nil
 		}
 
-		legacyEndpoint := parseLegacyEndpointValue(item.Value)
-		if legacyEndpoint == "" {
-			return moduleInstallTarget{}, "", errorvar.ErrModuleEndpointInvalid
-		}
-		localHost := detectLocalIPv4()
-		if localHost == "" {
-			localHost = "127.0.0.1"
-		}
-		return moduleInstallTarget{
-			Scope:    ModuleInstallScopeLocal,
-			Username: "aurora",
-			Host:     localHost,
-			Port:     22,
-		}, legacyEndpoint, nil
+		return moduleInstallTarget{}, "", errorvar.ErrModuleEndpointInvalid
 	}
 
 	return moduleInstallTarget{}, "", errorvar.ErrModuleEndpointNotFound

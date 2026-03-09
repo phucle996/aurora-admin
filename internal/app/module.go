@@ -121,6 +121,9 @@ func NewModules(
 		certStoreRepo,
 		cfg.CertStore.Prefix,
 		cfg.Database.URL,
+		cfg.App.TLSCA,
+		cfg.App.TLSCert,
+		cfg.App.TLSKey,
 		map[string]string{
 			"ums":      cfg.ModuleInstall.UMSInstallScriptURL,
 			"platform": cfg.ModuleInstall.PlatformInstallScriptURL,
@@ -129,7 +132,14 @@ func NewModules(
 			"ui":       cfg.ModuleInstall.UIInstallScriptURL,
 		},
 	)
-	runtimeSvc := apisvc.NewRuntimeBootstrapService(runtimeRepo, enabledModuleRepo, certStoreRepo, cfg.CertStore.Prefix)
+	runtimeSvc := apisvc.NewRuntimeBootstrapService(
+		runtimeRepo,
+		enabledModuleRepo,
+		certStoreRepo,
+		cfg.CertStore.Prefix,
+		cfg.App.TLSCA,
+		cfg.App.TLSCAKey,
+	)
 
 	return &Modules{
 		Etcd:             etcdClient,

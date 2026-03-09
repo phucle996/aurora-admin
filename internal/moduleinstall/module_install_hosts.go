@@ -1,10 +1,8 @@
 package moduleinstall
 
 import (
-	sshpkg "admin/pkg/ssh"
 	"context"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -23,45 +21,18 @@ func syncHostsForTargets(
 
 	for _, target := range targets {
 		switch target.Scope {
-		case ModuleInstallScopeLocal:
-			hasErr := false
-			for _, entry := range entries {
-				if err := upsertLocalHosts(entry.Address, entry.Host); err != nil {
-					hasErr = true
-					warnings = append(warnings, fmt.Sprintf("local hosts update failed (%s): %v", entry.Host, err))
-					continue
-				}
-			}
-			if hasErr {
-				continue
-			}
-			hostsUpdated = append(hostsUpdated, "local")
 		case ModuleInstallScopeRemote:
 			hasErr := false
-			if target.HostKeyFingerprint == nil {
-				warnings = append(warnings, fmt.Sprintf("remote hosts update skipped (%s): missing ssh host key fingerprint", target.Host))
+			if target.AgentGRPCEndpoint == "" {
+				warnings = append(warnings, fmt.Sprintf("remote hosts update skipped (%s): missing agent endpoint", target.Host))
 				continue
 			}
 			for _, entry := range entries {
 				cmd := buildHostsUpdateCommand(entry.Address, entry.Host, target.SudoPassword)
-				runCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-				runResult, err := sshpkg.Run(runCtx, sshpkg.RunInput{
-					Host:               target.Host,
-					Port:               target.Port,
-					Username:           target.Username,
-					Password:           target.Password,
-					PrivateKey:         target.PrivateKey,
-					HostKeyFingerprint: target.HostKeyFingerprint,
-					Timeout:            15 * time.Second,
-					Command:            cmd,
-				})
-				cancel()
+				runResultOutput, _, err := runCommandOnTarget(ctx, target, cmd, 20*time.Second, nil, nil)
 				if err != nil {
 					hasErr = true
-					detail := ""
-					if runResult != nil {
-						detail = strings.TrimSpace(runResult.Output)
-					}
+					detail := strings.TrimSpace(runResultOutput)
 					if detail != "" {
 						detail = strings.Join(strings.Fields(detail), " ")
 						warnings = append(warnings, fmt.Sprintf("remote hosts update failed (%s/%s): %v (%s)", target.Host, entry.Host, err, detail))
@@ -80,18 +51,12 @@ func syncHostsForTargets(
 	return hostsUpdated, warnings
 }
 
-func upsertLocalHosts(address, host string) error {
-	script := buildHostsUpdateScript(address, host, nil)
-	cmd := exec.Command("bash", "-lc", script)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
-	}
-	return nil
-}
-
 func buildHostsUpdateCommand(address, host string, sudoPassword *string) string {
 	return "bash -lc " + strconv.Quote(buildHostsUpdateScript(address, host, sudoPassword))
+}
+
+func buildHostsDeleteCommand(host string, sudoPassword *string) string {
+	return "bash -lc " + strconv.Quote(buildHostsDeleteScript(host, sudoPassword))
 }
 
 func buildHostsUpdateScript(address, host string, sudoPassword *string) string {
@@ -111,5 +76,23 @@ func buildHostsUpdateScript(address, host string, sudoPassword *string) string {
 		`set -e; sudo_pw=%s; update_cmd=%s; if [ "$(id -u)" -eq 0 ]; then sh -lc "$update_cmd"; exit $?; fi; if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then sudo -n sh -lc "$update_cmd"; exit $?; fi; if command -v sudo >/dev/null 2>&1 && [ -n "$sudo_pw" ]; then printf '%%s\n' "$sudo_pw" | sudo -S -k sh -lc "$update_cmd"; exit $?; fi; echo "need sudo privilege to write /etc/hosts" >&2; exit 1`,
 		shellEscape(sudoPasswordValue),
 		shellEscape(updateCmd),
+	)
+}
+
+func buildHostsDeleteScript(host string, sudoPassword *string) string {
+	sudoPasswordValue := ""
+	if sudoPassword != nil {
+		sudoPasswordValue = *sudoPassword
+	}
+	hostPattern := fmt.Sprintf("(^|[[:space:]])%s([[:space:]]|$)", regexpEscape(host))
+	deleteCmd := fmt.Sprintf(
+		`if grep -Eq %s /etc/hosts; then sed -i -E '/%s/d' /etc/hosts; fi`,
+		shellEscape(hostPattern),
+		hostPattern,
+	)
+	return fmt.Sprintf(
+		`set -e; sudo_pw=%s; delete_cmd=%s; if [ "$(id -u)" -eq 0 ]; then sh -lc "$delete_cmd"; exit $?; fi; if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then sudo -n sh -lc "$delete_cmd"; exit $?; fi; if command -v sudo >/dev/null 2>&1 && [ -n "$sudo_pw" ]; then printf '%%s\n' "$sudo_pw" | sudo -S -k sh -lc "$delete_cmd"; exit $?; fi; echo "need sudo privilege to write /etc/hosts" >&2; exit 1`,
+		shellEscape(sudoPasswordValue),
+		shellEscape(deleteCmd),
 	)
 }
