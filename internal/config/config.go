@@ -5,10 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
-	"github.com/joho/godotenv"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
@@ -126,9 +124,6 @@ type Config struct {
 }
 
 func LoadConfig() *Config {
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, reading environment variables directly")
-	}
 
 	return &Config{
 		App: AppCfg{

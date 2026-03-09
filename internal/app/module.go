@@ -121,11 +121,13 @@ func NewModules(
 		certStoreRepo,
 		cfg.CertStore.Prefix,
 		cfg.Database.URL,
-		cfg.ModuleInstall.UMSInstallScriptURL,
-		cfg.ModuleInstall.PlatformInstallScriptURL,
-		cfg.ModuleInstall.PaaSInstallScriptURL,
-		cfg.ModuleInstall.DBaaSInstallScriptURL,
-		cfg.ModuleInstall.UIInstallScriptURL,
+		map[string]string{
+			"ums":      cfg.ModuleInstall.UMSInstallScriptURL,
+			"platform": cfg.ModuleInstall.PlatformInstallScriptURL,
+			"paas":     cfg.ModuleInstall.PaaSInstallScriptURL,
+			"dbaas":    cfg.ModuleInstall.DBaaSInstallScriptURL,
+			"ui":       cfg.ModuleInstall.UIInstallScriptURL,
+		},
 	)
 	runtimeSvc := apisvc.NewRuntimeBootstrapService(runtimeRepo, enabledModuleRepo, certStoreRepo, cfg.CertStore.Prefix)
 

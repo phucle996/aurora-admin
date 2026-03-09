@@ -82,11 +82,7 @@ type ModuleInstallService struct {
 	certStorePrefix string
 	databaseURL     string
 
-	umsInstallScriptURL      string
-	platformInstallScriptURL string
-	paasInstallScriptURL     string
-	dbaasInstallScriptURL    string
-	uiInstallScriptURL       string
+	installScriptURLByModule map[string]string
 }
 
 type InstallLogFn func(stage, message string)
@@ -97,23 +93,24 @@ func NewModuleInstallService(
 	certStoreRepo repository.CertStoreRepository,
 	certStorePrefix string,
 	databaseURL string,
-	umsInstallScriptURL string,
-	platformInstallScriptURL string,
-	paasInstallScriptURL string,
-	dbaasInstallScriptURL string,
-	uiInstallScriptURL string,
+	installScriptURLByModule map[string]string,
 ) *ModuleInstallService {
+	normalizedScriptURLs := make(map[string]string, len(installScriptURLByModule))
+	for moduleName, scriptURL := range installScriptURLByModule {
+		canonicalName := canonicalModuleName(moduleName)
+		if canonicalName == "" {
+			continue
+		}
+		normalizedScriptURLs[canonicalName] = strings.TrimSpace(scriptURL)
+	}
+
 	return &ModuleInstallService{
 		endpointRepo:             endpointRepo,
 		runtimeRepo:              runtimeRepo,
 		certStoreRepo:            certStoreRepo,
 		certStorePrefix:          strings.TrimSpace(certStorePrefix),
 		databaseURL:              strings.TrimSpace(databaseURL),
-		umsInstallScriptURL:      strings.TrimSpace(umsInstallScriptURL),
-		platformInstallScriptURL: strings.TrimSpace(platformInstallScriptURL),
-		paasInstallScriptURL:     strings.TrimSpace(paasInstallScriptURL),
-		dbaasInstallScriptURL:    strings.TrimSpace(dbaasInstallScriptURL),
-		uiInstallScriptURL:       strings.TrimSpace(uiInstallScriptURL),
+		installScriptURLByModule: normalizedScriptURLs,
 	}
 }
 
@@ -405,20 +402,10 @@ func (s *ModuleInstallService) addSchemaRollbackStep(stack *rollbackStack, resul
 }
 
 func (s *ModuleInstallService) installScriptURL(moduleName string) string {
-	switch canonicalModuleName(moduleName) {
-	case "ums":
-		return strings.TrimSpace(s.umsInstallScriptURL)
-	case "platform":
-		return strings.TrimSpace(s.platformInstallScriptURL)
-	case "paas":
-		return strings.TrimSpace(s.paasInstallScriptURL)
-	case "dbaas":
-		return strings.TrimSpace(s.dbaasInstallScriptURL)
-	case "ui":
-		return strings.TrimSpace(s.uiInstallScriptURL)
-	default:
+	if s == nil {
 		return ""
 	}
+	return strings.TrimSpace(s.installScriptURLByModule[canonicalModuleName(moduleName)])
 }
 
 func (s *ModuleInstallService) prepareSchemaAndMigrate(
