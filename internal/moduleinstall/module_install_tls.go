@@ -125,6 +125,54 @@ func installModuleTLSOnTarget(
 	return bundle, nil
 }
 
+func moduleTLSExistsOnTarget(
+	ctx context.Context,
+	target moduleInstallTarget,
+	moduleName string,
+) (bool, string, error) {
+	paths := resolveModuleTLSPaths(moduleName)
+	sudoPasswordB64 := ""
+	if target.Password != nil {
+		sudoPasswordB64 = base64.StdEncoding.EncodeToString([]byte(*target.Password))
+	}
+
+	script := strings.Join([]string{
+		"set -e",
+		"sudo_pw_b64=" + shellEscape(sudoPasswordB64),
+		`sudo_pw=""`,
+		`if [ -n "$sudo_pw_b64" ]; then sudo_pw="$(printf '%s' "$sudo_pw_b64" | base64 -d 2>/dev/null || true)"; fi`,
+		"cert_path=" + shellEscape(paths.CertPath),
+		"key_path=" + shellEscape(paths.KeyPath),
+		"ca_path=" + shellEscape(paths.CAPath),
+		`check_file(){`,
+		`  path="$1"`,
+		`  if [ -f "$path" ]; then return 0; fi`,
+		`  if command -v sudo >/dev/null 2>&1 && sudo -n test -f "$path" >/dev/null 2>&1; then return 0; fi`,
+		`  if command -v sudo >/dev/null 2>&1 && [ -n "$sudo_pw" ]; then printf '%s\n' "$sudo_pw" | sudo -S -k test -f "$path" >/dev/null 2>&1; return $?; fi`,
+		`  return 1`,
+		`}`,
+		`missing=""`,
+		`check_file "$cert_path" || missing="$missing cert=$cert_path"`,
+		`check_file "$key_path" || missing="$missing key=$key_path"`,
+		`check_file "$ca_path" || missing="$missing ca=$ca_path"`,
+		`if [ -n "$missing" ]; then echo "$missing"; exit 42; fi`,
+		`echo "tls_ok"`,
+	}, "\n")
+
+	output, exitCode, runErr := runCommandOnTarget(ctx, target, script, 20*time.Second, nil, nil)
+	trimmed := strings.TrimSpace(output)
+	if runErr == nil && exitCode == 0 {
+		return true, trimmed, nil
+	}
+	if exitCode == 42 {
+		return false, trimmed, nil
+	}
+	if runErr != nil {
+		return false, trimmed, fmt.Errorf("check tls materials failed (exit_code=%d): %w", exitCode, runErr)
+	}
+	return false, trimmed, fmt.Errorf("check tls materials failed (exit_code=%d)", exitCode)
+}
+
 func generateModuleTLSBundle(host string, moduleName string) (*moduleTLSBundle, error) {
 	caCert, caKey, caPEM, err := loadSigningCA()
 	if err != nil {

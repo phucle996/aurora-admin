@@ -3,9 +3,12 @@ package grpc
 import (
 	"admin/internal/service"
 	"context"
+	"errors"
 
 	gogrpc "google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -38,12 +41,20 @@ func (s *RuntimeTransportService) GetUMSBootstrap(
 
 	moduleName := readStructString(req, "module_name")
 	appPort := readStructInt32(req, "app_port")
+	clientCertDER, certErr := extractClientCertDER(ctx)
+	if certErr != nil {
+		return nil, status.Error(codes.Unauthenticated, certErr.Error())
+	}
+	if err := s.runtimeSvc.AuthorizeBootstrapClient(ctx, moduleName, clientCertDER); err != nil {
+		return nil, status.Error(codes.PermissionDenied, err.Error())
+	}
+
 	values, err := s.runtimeSvc.BuildRuntimeValues(ctx, service.RuntimeBootstrapRequest{
 		ModuleName: moduleName,
 		AppPort:    appPort,
 	})
 	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, status.Error(codes.Internal, "failed to build runtime bootstrap values")
 	}
 
 	valuesAny := make(map[string]any, len(values))
@@ -59,6 +70,21 @@ func (s *RuntimeTransportService) GetUMSBootstrap(
 		return nil, status.Error(codes.Internal, "failed to build grpc response payload")
 	}
 	return res, nil
+}
+
+func extractClientCertDER(ctx context.Context) ([]byte, error) {
+	p, ok := peer.FromContext(ctx)
+	if !ok || p == nil || p.AuthInfo == nil {
+		return nil, errors.New("missing peer auth info")
+	}
+	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
+	if !ok {
+		return nil, errors.New("invalid peer auth type")
+	}
+	if len(tlsInfo.State.PeerCertificates) == 0 || tlsInfo.State.PeerCertificates[0] == nil {
+		return nil, errors.New("missing peer certificate")
+	}
+	return tlsInfo.State.PeerCertificates[0].Raw, nil
 }
 
 func RegisterRuntimeTransportServer(server *gogrpc.Server, svc *RuntimeTransportService) {

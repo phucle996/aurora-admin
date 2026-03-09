@@ -4,7 +4,10 @@ import (
 	keycfg "admin/internal/key"
 	"admin/internal/repository"
 	pkgutils "admin/pkg/utils"
+	"bytes"
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net"
 	"net/url"
@@ -106,14 +109,17 @@ func (s *RuntimeBootstrapService) BuildRuntimeValues(
 		return nil, err
 	}
 
-	appPort, err := s.resolveModulePort(ctx, moduleName, req.AppPort)
+	endpointItems, endpointListErr := s.endpointRepo.List(ctx)
+	endpointMap := buildModuleEndpointMap(endpointItems)
+
+	appPort, err := s.resolveModulePort(moduleName, req.AppPort, endpointMap, endpointListErr)
 	if err != nil {
 		return nil, err
 	}
 
 	values["app/port"] = strconv.Itoa(int(appPort))
 	for _, dep := range runtimeEndpointDependencies(moduleName) {
-		baseURL, resolveErr := s.resolveModuleBaseURL(ctx, dep.TargetModule)
+		baseURL, resolveErr := s.resolveModuleBaseURL(dep.TargetModule, endpointMap, endpointListErr)
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
@@ -285,98 +291,113 @@ func runtimeEndpointDependencies(moduleName string) []endpointRuntimeDependency 
 }
 
 func (s *RuntimeBootstrapService) resolveModulePort(
-	ctx context.Context,
 	moduleName string,
 	requestedPort int32,
+	endpointMap map[string]string,
+	endpointListErr error,
 ) (int32, error) {
 	if requestedPort < 0 || requestedPort > 65535 {
 		return 0, fmt.Errorf("app_port is invalid")
 	}
-	if requestedPort > 0 {
-		return requestedPort, nil
+	if endpointListErr != nil {
+		return 0, fmt.Errorf("resolve %s endpoint failed: %w", normalizeBootstrapModuleName(moduleName), endpointListErr)
 	}
 
-	items, err := s.endpointRepo.List(ctx)
-	if err != nil {
-		if fallback := defaultBootstrapAppPort(moduleName); fallback > 0 {
-			return fallback, nil
-		}
-		return pkgutils.RandomAvailableLocalPort()
+	canonicalName := normalizeBootstrapModuleName(moduleName)
+	endpoint := strings.TrimSpace(endpointMap[canonicalName])
+	if endpoint == "" {
+		return 0, fmt.Errorf("%s endpoint not found", canonicalName)
 	}
-
-	for _, item := range items {
-		name := normalizeBootstrapModuleName(item.Name)
-		if name != moduleName {
-			continue
-		}
-		endpoint := resolveEndpointFromStoredValue(strings.TrimSpace(item.Value))
-		if endpoint == "" {
-			continue
-		}
-		port := strings.TrimSpace(pkgutils.EndpointPort(endpoint))
-		if port == "" {
-			continue
-		}
-		parsed, parseErr := strconv.Atoi(port)
-		if parseErr != nil || parsed <= 0 || parsed > 65535 {
-			continue
-		}
-		return int32(parsed), nil
+	port := strings.TrimSpace(pkgutils.EndpointPort(endpoint))
+	if port == "" {
+		return 0, fmt.Errorf("%s endpoint has no port", canonicalName)
 	}
-
-	if fallback := defaultBootstrapAppPort(moduleName); fallback > 0 {
-		return fallback, nil
+	parsed, parseErr := strconv.Atoi(port)
+	if parseErr != nil || parsed <= 0 || parsed > 65535 {
+		return 0, fmt.Errorf("%s endpoint port is invalid", canonicalName)
 	}
-	return pkgutils.RandomAvailableLocalPort()
-}
-
-func defaultBootstrapAppPort(moduleName string) int32 {
-	switch normalizeBootstrapModuleName(moduleName) {
-	case "ums":
-		return 3005
-	case "platform":
-		return 8080
-	default:
-		return 0
+	if requestedPort > 0 && requestedPort != int32(parsed) {
+		return 0, fmt.Errorf("app_port mismatch with %s endpoint", canonicalName)
 	}
+	return int32(parsed), nil
 }
 
 func resolveEndpointFromStoredValue(raw string) string {
-	if _, endpoint, ok := parseEndpointValueWithScope(raw); ok {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+	if _, endpoint, ok := parseEndpointValueWithScope(value); ok {
 		return strings.TrimSpace(endpoint)
 	}
-	if _, endpoint, ok := strings.Cut(raw, ":"); ok {
+	if status, endpoint, ok := strings.Cut(value, ":"); ok && isLegacyEndpointStatus(status) {
 		return strings.TrimSpace(endpoint)
 	}
-	return ""
+	return value
 }
 
-func (s *RuntimeBootstrapService) resolveModuleBaseURL(ctx context.Context, moduleName string) (string, error) {
-	targetName := normalizeBootstrapModuleName(moduleName)
-	if targetName == "" {
-		return "", fmt.Errorf("target module is required")
+func isLegacyEndpointStatus(raw string) bool {
+	status := strings.ToLower(strings.TrimSpace(raw))
+	switch status {
+	case "running",
+		"installed",
+		"installing",
+		"stopped",
+		"degraded",
+		"error",
+		"healthy",
+		"unhealthy",
+		"maintenance",
+		"not_installed",
+		"unknown":
+		return true
+	default:
+		return false
 	}
-	items, err := s.endpointRepo.List(ctx)
-	if err != nil {
-		return "", fmt.Errorf("resolve %s endpoint failed: %w", targetName, err)
-	}
+}
+
+func buildModuleEndpointMap(items []repository.EndpointKV) map[string]string {
+	out := make(map[string]string, len(items))
 	for _, item := range items {
-		if normalizeBootstrapModuleName(item.Name) != targetName {
+		moduleName := normalizeBootstrapModuleName(item.Name)
+		if moduleName == "" {
+			continue
+		}
+		if _, exists := out[moduleName]; exists {
 			continue
 		}
 		endpoint := strings.TrimSpace(resolveEndpointFromStoredValue(item.Value))
 		if endpoint == "" {
 			continue
 		}
-		if strings.HasPrefix(endpoint, "http://") {
-			return "", fmt.Errorf("%s endpoint must use https for mTLS", targetName)
-		}
-		if strings.HasPrefix(endpoint, "https://") {
-			return strings.TrimRight(endpoint, "/"), nil
-		}
-		return "https://" + strings.TrimRight(endpoint, "/"), nil
+		out[moduleName] = endpoint
 	}
-	return "", fmt.Errorf("%s endpoint not found", targetName)
+	return out
+}
+
+func (s *RuntimeBootstrapService) resolveModuleBaseURL(
+	moduleName string,
+	endpointMap map[string]string,
+	endpointListErr error,
+) (string, error) {
+	targetName := normalizeBootstrapModuleName(moduleName)
+	if targetName == "" {
+		return "", fmt.Errorf("target module is required")
+	}
+	if endpointListErr != nil {
+		return "", fmt.Errorf("resolve %s endpoint failed: %w", targetName, endpointListErr)
+	}
+	endpoint := strings.TrimSpace(endpointMap[targetName])
+	if endpoint == "" {
+		return "", fmt.Errorf("%s endpoint not found", targetName)
+	}
+	if strings.HasPrefix(endpoint, "http://") {
+		return "", fmt.Errorf("%s endpoint must use https for mTLS", targetName)
+	}
+	if strings.HasPrefix(endpoint, "https://") {
+		return strings.TrimRight(endpoint, "/"), nil
+	}
+	return "https://" + strings.TrimRight(endpoint, "/"), nil
 }
 
 func toGRPCEndpoint(baseURL string) string {
@@ -448,4 +469,53 @@ func (s *RuntimeBootstrapService) loadModuleTLSBundle(ctx context.Context, modul
 		"tls/client_key_pem":  strings.TrimSpace(loaded[clientKeyKey]),
 	}
 	return values, nil
+}
+
+func (s *RuntimeBootstrapService) AuthorizeBootstrapClient(
+	ctx context.Context,
+	moduleName string,
+	presentedClientCertDER []byte,
+) error {
+	if s == nil || s.certStoreRepo == nil {
+		return fmt.Errorf("runtime bootstrap service is nil")
+	}
+	name := normalizeBootstrapModuleName(moduleName)
+	if name == "" {
+		return fmt.Errorf("module_name is required")
+	}
+	if len(presentedClientCertDER) == 0 {
+		return fmt.Errorf("missing client certificate")
+	}
+
+	objectID := runtimeBootstrapTLSObjectID(name)
+	clientCertKey := runtimeBootstrapTLSStoreKey(s.certStorePrefix, objectID, "client_cert")
+	loaded, err := s.certStoreRepo.GetMany(ctx, []string{clientCertKey})
+	if err != nil {
+		return fmt.Errorf("load cert store keys failed: %w", err)
+	}
+
+	expectedPEM := strings.TrimSpace(loaded[clientCertKey])
+	if expectedPEM == "" {
+		return fmt.Errorf("client certificate not found for module %s", name)
+	}
+
+	expectedDER, err := decodeCertificatePEM(expectedPEM)
+	if err != nil {
+		return fmt.Errorf("invalid stored client certificate for module %s: %w", name, err)
+	}
+	if !bytes.Equal(expectedDER, presentedClientCertDER) {
+		return fmt.Errorf("client certificate does not match module %s", name)
+	}
+	return nil
+}
+
+func decodeCertificatePEM(raw string) ([]byte, error) {
+	block, _ := pem.Decode([]byte(strings.TrimSpace(raw)))
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, fmt.Errorf("invalid cert pem")
+	}
+	if _, err := x509.ParseCertificate(block.Bytes); err != nil {
+		return nil, fmt.Errorf("parse cert failed: %w", err)
+	}
+	return block.Bytes, nil
 }

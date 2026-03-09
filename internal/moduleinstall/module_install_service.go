@@ -182,7 +182,7 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 	endpoints := s.loadEndpointListSnapshot(ctx)
 
 	adminRPCEndpoint := ""
-	if moduleRequiresAdminRPC(moduleName) {
+	if moduleName == "ums" || moduleRequiresAdminRPC(moduleName) {
 		adminRPCEndpoint, err = s.resolveAdminBootstrapEndpoint(endpoints.items, endpoints.err)
 		if err != nil {
 			return nil, err
@@ -253,9 +253,29 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 	logInstall(logFn, "endpoint", "endpoint updated")
 
 	logInstall(logFn, "install", "running install command")
-	output, exitCode, installErr := runInstallCommand(ctx, command, target, func(line string) {
-		logInstall(logFn, "ssh", "%s", line)
-	})
+	logInstall(
+		logFn,
+		"ssh",
+		"exec begin host=%s port=%d user=%s auth=%s timeout=%s cmd_bytes=%d",
+		target.Host,
+		target.Port,
+		target.Username,
+		describeSSHAuthMode(target),
+		installSSHCommandTimeout.String(),
+		len(command),
+	)
+	output, exitCode, installErr := runInstallCommand(
+		ctx,
+		command,
+		target,
+		func(line string) {
+			logInstall(logFn, "ssh", "[stdout] %s", line)
+		},
+		func(line string) {
+			logInstall(logFn, "ssh", "[stderr] %s", line)
+		},
+	)
+	logInstall(logFn, "ssh", "exec completed exit_code=%d output_lines=%d", exitCode, lineCount(output))
 	result.InstallExecuted = true
 	result.InstallOutput = strings.TrimSpace(output)
 	result.InstallExitCode = exitCode
@@ -267,6 +287,37 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 		return nil, fmt.Errorf("install command failed: exit_code=%d", exitCode)
 	}
 	logInstall(logFn, "install", "install command completed exit_code=%d", exitCode)
+
+	tlsPresent, tlsCheckOutput, tlsCheckErr := moduleTLSExistsOnTarget(ctx, target, moduleName)
+	if tlsCheckErr != nil {
+		logInstall(logFn, "tls", "[warn] cannot verify tls materials on target: %v", tlsCheckErr)
+	} else if !tlsPresent {
+		logInstall(logFn, "tls", "[warn] tls materials missing after install, reinstalling: %s", strings.TrimSpace(tlsCheckOutput))
+		repairedBundle, repairErr := installModuleTLSOnTarget(ctx, target, moduleName, appHost, endpoint, logFn)
+		if repairErr != nil {
+			logInstall(logFn, "tls", "[error] tls self-heal failed: %v", repairErr)
+			return nil, fmt.Errorf("tls materials missing after install: %w", repairErr)
+		}
+		if seedErr := s.seedModuleTLSBundle(ctx, moduleName, repairedBundle); seedErr != nil {
+			logInstall(logFn, "tls", "[error] seed repaired tls bundle failed: %v", seedErr)
+			return nil, fmt.Errorf("seed repaired tls bundle failed: %w", seedErr)
+		}
+		logInstall(logFn, "tls", "tls self-heal completed")
+	}
+
+	if hostEntryHost := strings.TrimSpace(appHost); hostEntryHost != "" {
+		hostEntry := hostsEntry{
+			Address: normalizeAddress(target.Host),
+			Host:    hostEntryHost,
+		}
+		if hostEntry.Address != "" {
+			logInstall(logFn, "hosts", "pre-healthcheck sync host %s -> %s", hostEntry.Host, hostEntry.Address)
+			_, warnings := syncHostsForTargets(ctx, []hostsEntry{hostEntry}, []moduleInstallTarget{target})
+			for _, warning := range warnings {
+				logInstall(logFn, "hosts", "[warn] %s", warning)
+			}
+		}
+	}
 
 	logInstall(logFn, "healthcheck", "checking endpoint health")
 	for _, candidate := range buildHealthcheckCandidates(endpoint) {
@@ -459,4 +510,22 @@ func (s *ModuleInstallService) prepareSchemaAndMigrate(
 	result.MigrationSource = migrationSource
 	logInstall(logFn, "migration", "migrations applied")
 	return nil
+}
+
+func describeSSHAuthMode(target moduleInstallTarget) string {
+	if target.PrivateKey != nil && strings.TrimSpace(*target.PrivateKey) != "" {
+		return "private_key"
+	}
+	if target.Password != nil && strings.TrimSpace(*target.Password) != "" {
+		return "password"
+	}
+	return "agent_or_default_key"
+}
+
+func lineCount(raw string) int {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return 0
+	}
+	return strings.Count(trimmed, "\n") + 1
 }

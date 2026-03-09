@@ -22,17 +22,19 @@ import (
 )
 
 const (
-	randomPortMin = 20000
-	randomPortMax = 60000
+	randomPortMin            = 20000
+	randomPortMax            = 60000
+	installSSHCommandTimeout = 40 * time.Minute
 )
 
 func runInstallCommand(
 	ctx context.Context,
 	command string,
 	target moduleInstallTarget,
-	onLine func(line string),
+	onStdout func(line string),
+	onStderr func(line string),
 ) (string, int, error) {
-	return runCommandOnTarget(ctx, target, command, 40*time.Second, onLine, onLine)
+	return runCommandOnTarget(ctx, target, command, installSSHCommandTimeout, onStdout, onStderr)
 }
 
 func runCommandOnTarget(
@@ -432,6 +434,12 @@ func buildDefaultModuleInstallCommand(
 	switch canonicalModuleName(moduleName) {
 	case "ums":
 		args = append(args, "-r", "phucle996/aurora-ums")
+		if strings.TrimSpace(appHost) != "" {
+			args = append(args, "--app-host", strings.TrimSpace(appHost))
+		}
+		if strings.TrimSpace(adminRPCEndpoint) != "" {
+			args = append(args, "--admin-rpc-endpoint", strings.TrimSpace(adminRPCEndpoint))
+		}
 		preRunSteps = append(preRunSteps, `sed -i '/trap .* RETURN/d' "$tmp_script" || true`)
 	case "platform":
 		if strings.TrimSpace(adminRPCEndpoint) == "" {
@@ -645,9 +653,16 @@ func ensureCurlAndCheckEndpoint(
 		"cert_path=" + shellEscape(tlsPaths.CertPath),
 		"key_path=" + shellEscape(tlsPaths.KeyPath),
 		"ca_path=" + shellEscape(tlsPaths.CAPath),
-		"[ -f \"$cert_path\" ] || { echo \"missing tls cert: $cert_path\"; exit 1; }",
-		"[ -f \"$key_path\" ] || { echo \"missing tls key: $key_path\"; exit 1; }",
-		"[ -f \"$ca_path\" ] || { echo \"missing tls ca: $ca_path\"; exit 1; }",
+		"check_file(){",
+		"  path=\"$1\"",
+		"  if [ -f \"$path\" ]; then return 0; fi",
+		"  if command -v sudo >/dev/null 2>&1 && sudo -n test -f \"$path\" >/dev/null 2>&1; then return 0; fi",
+		"  if command -v sudo >/dev/null 2>&1 && [ -n \"$sudo_pw\" ]; then printf '%s\\n' \"$sudo_pw\" | sudo -S -k test -f \"$path\" >/dev/null 2>&1; return $?; fi",
+		"  return 1",
+		"}",
+		"check_file \"$cert_path\" || { echo \"missing tls cert: $cert_path\"; exit 1; }",
+		"check_file \"$key_path\" || { echo \"missing tls key: $key_path\"; exit 1; }",
+		"check_file \"$ca_path\" || { echo \"missing tls ca: $ca_path\"; exit 1; }",
 		"ensure_curl(){",
 		"  if command -v curl >/dev/null 2>&1; then return 0; fi",
 		"  install_cmd=''",
