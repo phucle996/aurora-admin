@@ -21,6 +21,7 @@ import type { ModuleStatusCard } from "./sections/module-page-types";
 function needsTerminalSudoPassword(message: string): boolean {
   const lowered = message.toLowerCase();
   return (
+    lowered.includes("provide sudo_password") ||
     lowered.includes("provide sudo password") ||
     lowered.includes("non-interactive sudo") ||
     lowered.includes("privilege=sudo-denied")
@@ -240,9 +241,13 @@ export default function ModulePage() {
             appendInstallLog(
               "[sudo] password required. Enter password in terminal then press Enter.",
             );
-            const typed = await requestSudoPasswordInTerminal("[sudo] Password: ");
-            if (!typed.trim()) {
-              throw new Error("sudo password is empty");
+            let typed = "";
+            for (;;) {
+              typed = await requestSudoPasswordInTerminal("[sudo] Password: ");
+              if (typed.trim()) {
+                break;
+              }
+              appendInstallLog("[sudo] empty password, please enter again.");
             }
             sudoPassword = typed;
             appendInstallLog("[sudo] retry install with provided sudo password");
