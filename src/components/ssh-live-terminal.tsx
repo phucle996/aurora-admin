@@ -5,9 +5,17 @@ import "@xterm/xterm/css/xterm.css";
 
 import { cn } from "@/lib/utils";
 
+export type SSHInputPrompt = {
+  id: string;
+  prompt: string;
+  maskInput?: boolean;
+};
+
 type SSHLiveTerminalProps = {
   logs: string[];
   running: boolean;
+  inputPrompt?: SSHInputPrompt | null;
+  onInputSubmit?: (value: string) => void;
   className?: string;
   emptyMessage?: string;
 };
@@ -29,6 +37,8 @@ function writeLine(term: Terminal, line: string) {
 export function SSHLiveTerminal({
   logs,
   running,
+  inputPrompt,
+  onInputSubmit,
   className,
   emptyMessage = "waiting backend stream...",
 }: SSHLiveTerminalProps) {
@@ -37,6 +47,14 @@ export function SSHLiveTerminal({
   const fitAddonRef = useRef<FitAddon | null>(null);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const writtenLinesRef = useRef(0);
+  const dataDisposableRef = useRef<{ dispose: () => void } | null>(null);
+  const promptInputBufferRef = useRef("");
+  const activePromptRef = useRef<SSHInputPrompt | null>(null);
+  const onInputSubmitRef = useRef(onInputSubmit);
+
+  useEffect(() => {
+    onInputSubmitRef.current = onInputSubmit;
+  }, [onInputSubmit]);
 
   useEffect(() => {
     if (!hostRef.current || terminalRef.current) {
@@ -73,6 +91,8 @@ export function SSHLiveTerminal({
     terminalRef.current = term;
     fitAddonRef.current = fitAddon;
     writtenLinesRef.current = 0;
+    promptInputBufferRef.current = "";
+    activePromptRef.current = null;
 
     if (logs.length === 0) {
       term.writeln(emptyMessage);
@@ -81,10 +101,14 @@ export function SSHLiveTerminal({
     return () => {
       resizeObserverRef.current?.disconnect();
       resizeObserverRef.current = null;
+      dataDisposableRef.current?.dispose();
+      dataDisposableRef.current = null;
       fitAddonRef.current = null;
       terminalRef.current?.dispose();
       terminalRef.current = null;
       writtenLinesRef.current = 0;
+      promptInputBufferRef.current = "";
+      activePromptRef.current = null;
     };
   }, [emptyMessage, logs.length, running]);
 
@@ -96,6 +120,90 @@ export function SSHLiveTerminal({
 
     term.options.cursorBlink = running;
   }, [running]);
+
+  useEffect(() => {
+    const term = terminalRef.current;
+    if (!term) {
+      return;
+    }
+
+    term.options.disableStdin = !inputPrompt;
+    if (!inputPrompt) {
+      promptInputBufferRef.current = "";
+      activePromptRef.current = null;
+      return;
+    }
+
+    if (activePromptRef.current?.id === inputPrompt.id) {
+      return;
+    }
+
+    activePromptRef.current = inputPrompt;
+    promptInputBufferRef.current = "";
+    term.write(inputPrompt.prompt);
+    term.focus();
+  }, [inputPrompt]);
+
+  useEffect(() => {
+    const term = terminalRef.current;
+    if (!term) {
+      return;
+    }
+
+    dataDisposableRef.current?.dispose();
+    dataDisposableRef.current = term.onData((data) => {
+      const prompt = activePromptRef.current;
+      if (!prompt) {
+        return;
+      }
+
+      if (data === "\r") {
+        const value = promptInputBufferRef.current;
+        promptInputBufferRef.current = "";
+        activePromptRef.current = null;
+        term.options.disableStdin = true;
+        term.write("\r\n");
+        onInputSubmitRef.current?.(value);
+        return;
+      }
+
+      if (data === "\u007f") {
+        if (promptInputBufferRef.current.length === 0) {
+          return;
+        }
+        promptInputBufferRef.current = promptInputBufferRef.current.slice(0, -1);
+        if (!prompt.maskInput) {
+          term.write("\b \b");
+        }
+        return;
+      }
+
+      if (data === "\u0003") {
+        // Ctrl+C: submit empty to unblock caller.
+        promptInputBufferRef.current = "";
+        activePromptRef.current = null;
+        term.options.disableStdin = true;
+        term.write("^C\r\n");
+        onInputSubmitRef.current?.("");
+        return;
+      }
+
+      for (const char of data) {
+        if (char < " " || char > "~") {
+          continue;
+        }
+        promptInputBufferRef.current += char;
+        if (!prompt.maskInput) {
+          term.write(char);
+        }
+      }
+    });
+
+    return () => {
+      dataDisposableRef.current?.dispose();
+      dataDisposableRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     const term = terminalRef.current;

@@ -1,6 +1,6 @@
 import { CheckCircle2, Loader2, XCircle } from "lucide-react";
 
-import { SSHLiveTerminal } from "@/components/ssh-live-terminal";
+import { SSHLiveTerminal, type SSHInputPrompt } from "@/components/ssh-live-terminal";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -20,6 +20,8 @@ type ModuleInstallLogDialogProps = {
   errorMessage: string;
   title?: string;
   description?: string;
+  inputPrompt?: SSHInputPrompt | null;
+  onInputSubmit?: (value: string) => void;
   onOpenChange: (open: boolean) => void;
 };
 
@@ -31,6 +33,8 @@ export function ModuleInstallLogDialog({
   errorMessage,
   title,
   description,
+  inputPrompt,
+  onInputSubmit,
   onOpenChange,
 }: ModuleInstallLogDialogProps) {
   const isSuccess = !running && !errorMessage && Boolean(result);
@@ -60,7 +64,12 @@ export function ModuleInstallLogDialog({
         </DialogHeader>
 
         <section className="space-y-3">
-          <SSHLiveTerminal logs={logs} running={running} />
+          <SSHLiveTerminal
+            logs={logs}
+            running={running}
+            inputPrompt={inputPrompt}
+            onInputSubmit={onInputSubmit}
+          />
         </section>
 
         <DialogFooter>

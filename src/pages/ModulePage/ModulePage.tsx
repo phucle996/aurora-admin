@@ -2,12 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 
+import type { SSHInputPrompt } from "@/components/ssh-live-terminal";
 import {
   installModuleStream,
   reinstallModuleCertStream,
-  type ModuleReinstallCertResult,
   type ModuleInstallResult,
   type ModuleInstallScope,
+  type ModuleReinstallCertResult,
 } from "@/hooks/module/use-module-install-api";
 import { useEnabledModules } from "@/state/enabled-modules-context";
 
@@ -17,16 +18,30 @@ import { buildModuleStatusCards } from "./sections/module-page-mapper";
 import { ModulePageContent } from "./sections/module-page-content";
 import type { ModuleStatusCard } from "./sections/module-page-types";
 
+function needsTerminalSudoPassword(message: string): boolean {
+  const lowered = message.toLowerCase();
+  return (
+    lowered.includes("provide sudo password") ||
+    lowered.includes("non-interactive sudo") ||
+    lowered.includes("privilege=sudo-denied")
+  );
+}
+
+type InstallPromptResolver = (value: string) => void;
+
 export default function ModulePage() {
   const { resolvedTheme } = useTheme();
-  const { items, status, error, lastFetchedAt, refreshModules } = useEnabledModules();
+  const { items, status, error, lastFetchedAt, refreshModules } =
+    useEnabledModules();
   const syncedOnMountRef = useRef(false);
 
   const [searchQuery, setSearchQuery] = useState("");
 
   const [installDialogOpen, setInstallDialogOpen] = useState(false);
   const [installSubmitting, setInstallSubmitting] = useState(false);
-  const [installTarget, setInstallTarget] = useState<ModuleStatusCard | null>(null);
+  const [installTarget, setInstallTarget] = useState<ModuleStatusCard | null>(
+    null,
+  );
   const [installScope] = useState<ModuleInstallScope>("remote");
   const [appHost, setAppHost] = useState("");
   const [appPort, setAppPort] = useState("");
@@ -34,16 +49,25 @@ export default function ModulePage() {
   const [sshPort, setSshPort] = useState("22");
   const [sshUsername, setSshUsername] = useState("aurora");
   const [sshPassword, setSshPassword] = useState("");
-  const [sudoPassword, setSudoPassword] = useState("");
   const [sshPrivateKey, setSshPrivateKey] = useState("");
   const [sshHostKeyFingerprint, setSshHostKeyFingerprint] = useState("");
   const [installLogDialogOpen, setInstallLogDialogOpen] = useState(false);
   const [installLogs, setInstallLogs] = useState<string[]>([]);
   const [installRunning, setInstallRunning] = useState(false);
-  const [installResult, setInstallResult] = useState<ModuleInstallResult | ModuleReinstallCertResult | null>(null);
+  const [installResult, setInstallResult] = useState<
+    ModuleInstallResult | ModuleReinstallCertResult | null
+  >(null);
   const [installError, setInstallError] = useState("");
-  const [logDialogTitle, setLogDialogTitle] = useState("Module Install SSH Logs");
-  const [logDialogDescription, setLogDialogDescription] = useState("Log chi tiet theo tung stage de debug install flow.");
+  const [logDialogTitle, setLogDialogTitle] = useState(
+    "Module Install SSH Logs",
+  );
+  const [logDialogDescription, setLogDialogDescription] = useState(
+    "Log chi tiet theo tung stage de debug install flow.",
+  );
+  const [installInputPrompt, setInstallInputPrompt] =
+    useState<SSHInputPrompt | null>(null);
+  const [installPromptResolver, setInstallPromptResolver] =
+    useState<InstallPromptResolver | null>(null);
 
   const isDark = resolvedTheme !== "light";
   const textPrimary = isDark ? "text-white" : "text-slate-900";
@@ -57,7 +81,8 @@ export default function ModulePage() {
       if (!q) {
         return true;
       }
-      const text = `${item.label} ${item.sourceName} ${item.endpoint} ${item.runtimeStatus}`.toLowerCase();
+      const text =
+        `${item.label} ${item.sourceName} ${item.endpoint} ${item.runtimeStatus}`.toLowerCase();
       return text.includes(q);
     });
   }, [cards, searchQuery]);
@@ -93,7 +118,6 @@ export default function ModulePage() {
     setSshPort("22");
     setSshUsername("aurora");
     setSshPassword("");
-    setSudoPassword("");
     setSshPrivateKey("");
     setSshHostKeyFingerprint("");
     setInstallDialogOpen(true);
@@ -101,6 +125,29 @@ export default function ModulePage() {
 
   const appendInstallLog = (line: string) => {
     setInstallLogs((prev) => [...prev, line]);
+  };
+
+  const requestSudoPasswordInTerminal = (promptText: string): Promise<string> => {
+    return new Promise((resolve) => {
+      const promptID = `${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 8)}`;
+      setInstallPromptResolver(() => resolve);
+      setInstallInputPrompt({
+        id: promptID,
+        prompt: promptText,
+        maskInput: true,
+      });
+    });
+  };
+
+  const handleInstallPromptSubmit = (value: string) => {
+    const resolve = installPromptResolver;
+    setInstallPromptResolver(null);
+    setInstallInputPrompt(null);
+    if (resolve) {
+      resolve(value);
+    }
   };
 
   const handleInstall = async () => {
@@ -118,17 +165,17 @@ export default function ModulePage() {
     }
     if (normalizedAppPort) {
       const parsedPort = Number.parseInt(normalizedAppPort, 10);
-      if (!Number.isInteger(parsedPort) || parsedPort <= 0 || parsedPort > 65535) {
+      if (
+        !Number.isInteger(parsedPort) ||
+        parsedPort <= 0 ||
+        parsedPort > 65535
+      ) {
         toast.error("app port phai trong khoang 1..65535");
         return;
       }
     }
 
-    if (
-      !sshHost.trim() ||
-      !sshUsername.trim() ||
-      !sshHostKeyFingerprint.trim()
-    ) {
+    if (!sshHost.trim() || !sshUsername.trim() || !sshHostKeyFingerprint.trim()) {
       toast.error("Remote install can ssh host, username va host key fingerprint");
       return;
     }
@@ -142,37 +189,79 @@ export default function ModulePage() {
     setInstallResult(null);
     setInstallError("");
     setInstallLogs([]);
+    setInstallInputPrompt(null);
+    setInstallPromptResolver(null);
 
     try {
-      const result = await installModuleStream({
-        module_name: moduleName,
-        scope: installScope,
-        app_host: normalizedAppHost,
-        app_port: normalizedAppPort ? Number.parseInt(normalizedAppPort, 10) : undefined,
-        ssh_host: sshHost.trim() || undefined,
-        ssh_port: Number.parseInt(sshPort.trim(), 10) || 22,
-        ssh_username: sshUsername.trim() || undefined,
-        ssh_password: sshPassword.trim() || undefined,
-        sudo_password: sudoPassword.trim() || undefined,
-        ssh_private_key: sshPrivateKey.trim() || undefined,
-        ssh_host_key_fingerprint: sshHostKeyFingerprint.trim() || undefined,
-      }, {
-        onLog: (stage, message) => {
-          if (stage === "ssh") {
-            appendInstallLog(message);
-            return;
-          }
-          appendInstallLog(`[${stage}] ${message}`);
-        },
-      });
-      setInstallResult(result);
+      const doInstall = async (sudoPassword?: string) => {
+        return installModuleStream(
+          {
+            module_name: moduleName,
+            scope: installScope,
+            app_host: normalizedAppHost,
+            app_port: normalizedAppPort
+              ? Number.parseInt(normalizedAppPort, 10)
+              : undefined,
+            ssh_host: sshHost.trim() || undefined,
+            ssh_port: Number.parseInt(sshPort.trim(), 10) || 22,
+            ssh_username: sshUsername.trim() || undefined,
+            ssh_password: sshPassword.trim() || undefined,
+            sudo_password: sudoPassword,
+            ssh_private_key: sshPrivateKey.trim() || undefined,
+            ssh_host_key_fingerprint: sshHostKeyFingerprint.trim() || undefined,
+          },
+          {
+            onLog: (stage, message) => {
+              if (stage === "ssh") {
+                appendInstallLog(message);
+                return;
+              }
+              appendInstallLog(`[${stage}] ${message}`);
+            },
+          },
+        );
+      };
 
+      let result: ModuleInstallResult | null = null;
+      let sudoPassword: string | undefined;
+      let askedSudoPassword = false;
+
+      for (;;) {
+        try {
+          result = await doInstall(sudoPassword);
+          break;
+        } catch (err) {
+          const message =
+            err instanceof Error && err.message.trim()
+              ? err.message
+              : "Install module that bai";
+          if (!askedSudoPassword && needsTerminalSudoPassword(message)) {
+            askedSudoPassword = true;
+            appendInstallLog(
+              "[sudo] password required. Enter password in terminal then press Enter.",
+            );
+            const typed = await requestSudoPasswordInTerminal("[sudo] Password: ");
+            if (!typed.trim()) {
+              throw new Error("sudo password is empty");
+            }
+            sudoPassword = typed;
+            appendInstallLog("[sudo] retry install with provided sudo password");
+            continue;
+          }
+          throw err;
+        }
+      }
+
+      if (!result) {
+        throw new Error("Install result is empty");
+      }
+
+      setInstallResult(result);
       if (result.warnings.length > 0) {
         toast.warning(result.warnings.join(" | "));
       } else {
         toast.success(`Install ${installTarget.label} thanh cong`);
       }
-
       await refreshModules({ force: true });
     } catch (err) {
       const message =
@@ -181,12 +270,14 @@ export default function ModulePage() {
           : "Install module that bai";
       setInstallError(message);
       appendInstallLog(`[error] ${message}`);
-      if (err instanceof Error && err.message.trim()) {
-        toast.error(err.message);
-      } else {
-        toast.error("Install module that bai");
-      }
+      toast.error(message);
     } finally {
+      const resolvePrompt = installPromptResolver;
+      if (typeof resolvePrompt === "function") {
+        resolvePrompt("");
+        setInstallPromptResolver(null);
+      }
+      setInstallInputPrompt(null);
       setInstallSubmitting(false);
       setInstallRunning(false);
     }
@@ -203,11 +294,15 @@ export default function ModulePage() {
     setInstallSubmitting(false);
     setInstallLogDialogOpen(true);
     setLogDialogTitle("Module Reinstall Cert Logs");
-    setLogDialogDescription("Reinstall CA/private/public key cho service va healthcheck sau khi cap nhat.");
+    setLogDialogDescription(
+      "Reinstall CA/private/public key cho service va healthcheck sau khi cap nhat.",
+    );
     setInstallRunning(true);
     setInstallResult(null);
     setInstallError("");
     setInstallLogs([]);
+    setInstallInputPrompt(null);
+    setInstallPromptResolver(null);
 
     try {
       const result = await reinstallModuleCertStream(
@@ -226,7 +321,6 @@ export default function ModulePage() {
       );
 
       setInstallResult(result);
-
       if (result.warnings.length > 0) {
         toast.warning(result.warnings.join(" | "));
       } else {
@@ -241,11 +335,7 @@ export default function ModulePage() {
           : "Reinstall cert that bai";
       setInstallError(message);
       appendInstallLog(`[error] ${message}`);
-      if (err instanceof Error && err.message.trim()) {
-        toast.error(err.message);
-      } else {
-        toast.error("Reinstall cert that bai");
-      }
+      toast.error(message);
     } finally {
       setInstallRunning(false);
     }
@@ -279,7 +369,6 @@ export default function ModulePage() {
         sshPort={sshPort}
         sshUsername={sshUsername}
         sshPassword={sshPassword}
-        sudoPassword={sudoPassword}
         sshPrivateKey={sshPrivateKey}
         sshHostKeyFingerprint={sshHostKeyFingerprint}
         onOpenChange={setInstallDialogOpen}
@@ -289,11 +378,11 @@ export default function ModulePage() {
         onSshPortChange={setSshPort}
         onSshUsernameChange={setSshUsername}
         onSshPasswordChange={setSshPassword}
-        onSudoPasswordChange={setSudoPassword}
         onSshPrivateKeyChange={setSshPrivateKey}
         onSshHostKeyFingerprintChange={setSshHostKeyFingerprint}
         onInstall={handleInstall}
       />
+
       <ModuleInstallLogDialog
         open={installLogDialogOpen}
         running={installRunning}
@@ -302,6 +391,8 @@ export default function ModulePage() {
         errorMessage={installError}
         title={logDialogTitle}
         description={logDialogDescription}
+        inputPrompt={installInputPrompt}
+        onInputSubmit={handleInstallPromptSubmit}
         onOpenChange={setInstallLogDialogOpen}
       />
     </main>
