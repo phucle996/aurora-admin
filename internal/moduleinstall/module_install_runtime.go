@@ -14,7 +14,6 @@ import (
 	"net"
 	"net/url"
 	"os/exec"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -533,25 +532,6 @@ func detectLocalIPv4() string {
 	return "127.0.0.1"
 }
 
-func mapToHostsEntries(raw map[string]string) []hostsEntry {
-	out := make([]hostsEntry, 0, len(raw))
-	for host, address := range raw {
-		cleanHost := strings.TrimSpace(host)
-		cleanAddress := normalizeAddress(address)
-		if cleanHost == "" || cleanAddress == "" {
-			continue
-		}
-		out = append(out, hostsEntry{
-			Address: cleanAddress,
-			Host:    cleanHost,
-		})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].Host < out[j].Host
-	})
-	return out
-}
-
 func isLoopbackAddress(raw string) bool {
 	clean := strings.TrimSpace(raw)
 	if clean == "" {
@@ -645,6 +625,12 @@ func ensureCurlAndCheckEndpoint(
 	if target.Password != nil {
 		sudoPasswordB64 = base64.StdEncoding.EncodeToString([]byte(*target.Password))
 	}
+	resolveHost := strings.TrimSpace(endpointHost(endpoint))
+	resolvePort := strings.TrimSpace(endpointPort(endpoint))
+	if resolvePort == "" {
+		resolvePort = "443"
+	}
+	resolveAddr := "127.0.0.1"
 	healthScript := strings.Join([]string{
 		"set -e",
 		"sudo_pw_b64=" + shellEscape(sudoPasswordB64),
@@ -653,6 +639,11 @@ func ensureCurlAndCheckEndpoint(
 		"cert_path=" + shellEscape(tlsPaths.CertPath),
 		"key_path=" + shellEscape(tlsPaths.KeyPath),
 		"ca_path=" + shellEscape(tlsPaths.CAPath),
+		"resolve_host=" + shellEscape(resolveHost),
+		"resolve_port=" + shellEscape(resolvePort),
+		"resolve_addr=" + shellEscape(resolveAddr),
+		`resolve_opt=""`,
+		`if [ -n "$resolve_host" ] && [ -n "$resolve_port" ] && [ -n "$resolve_addr" ]; then resolve_opt="--resolve ${resolve_host}:${resolve_port}:${resolve_addr}"; echo "healthcheck_resolve:${resolve_host}:${resolve_port}:${resolve_addr}"; fi`,
 		"check_file(){",
 		"  path=\"$1\"",
 		"  if [ -f \"$path\" ]; then return 0; fi",
@@ -679,7 +670,7 @@ func ensureCurlAndCheckEndpoint(
 		"}",
 		"ensure_curl",
 		"for url in " + strings.Join(urlList, " ") + "; do",
-		"  if curl --fail --silent --show-error --max-time 8 --cacert \"$ca_path\" --cert \"$cert_path\" --key \"$key_path\" \"$url\" >/dev/null; then",
+		"  if curl --fail --silent --show-error --max-time 8 --cacert \"$ca_path\" --cert \"$cert_path\" --key \"$key_path\" $resolve_opt \"$url\" >/dev/null; then",
 		"    echo \"healthcheck_ok:$url\"",
 		"    exit 0",
 		"  fi",

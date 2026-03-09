@@ -216,41 +216,6 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 		logInstall(logFn, "tls", "[error] %v", tlsErr)
 		return nil, fmt.Errorf("install tls materials failed: %w", tlsErr)
 	}
-	if seedErr := s.seedModuleTLSBundle(ctx, moduleName, tlsBundle); seedErr != nil {
-		logInstall(logFn, "tls", "[error] %v", seedErr)
-		return nil, fmt.Errorf("seed module tls bundle failed: %w", seedErr)
-	}
-	s.addModuleTLSRollbackStep(rollbacks, moduleName)
-	logInstall(logFn, "tls", "seeded module tls bundle into cert store")
-
-	if adminHostEntry, ok := s.resolveAdminHostsEntry(endpoints.items, endpoints.err); ok {
-		logInstall(logFn, "hosts", "pre-sync admin host %s -> %s", adminHostEntry.Host, adminHostEntry.Address)
-		_, warnings := syncHostsForTargets(ctx, []hostsEntry{adminHostEntry}, []moduleInstallTarget{target})
-		for _, warning := range warnings {
-			logInstall(logFn, "hosts", "[warn] %s", warning)
-		}
-	}
-
-	endpointValue := encodeEndpointValue(target, endpoint)
-	result.EndpointValue = endpointValue
-	logInstall(logFn, "endpoint", "upsert endpoint key=%s", keycfg.EndpointKey(moduleName))
-	if err := s.endpointRepo.Upsert(ctx, moduleName, endpointValue); err != nil {
-		logInstall(logFn, "endpoint", "[error] %v", err)
-		return nil, err
-	}
-	rollbacks.Add("endpoint", func(rollbackCtx context.Context) error {
-		if s.endpointRepo == nil {
-			return nil
-		}
-		cleanupCtx, cancel := context.WithTimeout(rollbackCtx, 10*time.Second)
-		deleteErr := s.endpointRepo.Delete(cleanupCtx, moduleName)
-		cancel()
-		if deleteErr != nil {
-			return fmt.Errorf("endpoint cleanup failed (%s): %w", moduleName, deleteErr)
-		}
-		return nil
-	})
-	logInstall(logFn, "endpoint", "endpoint updated")
 
 	logInstall(logFn, "install", "running install command")
 	logInstall(
@@ -298,66 +263,80 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 			logInstall(logFn, "tls", "[error] tls self-heal failed: %v", repairErr)
 			return nil, fmt.Errorf("tls materials missing after install: %w", repairErr)
 		}
-		if seedErr := s.seedModuleTLSBundle(ctx, moduleName, repairedBundle); seedErr != nil {
-			logInstall(logFn, "tls", "[error] seed repaired tls bundle failed: %v", seedErr)
-			return nil, fmt.Errorf("seed repaired tls bundle failed: %w", seedErr)
-		}
+		tlsBundle = repairedBundle
 		logInstall(logFn, "tls", "tls self-heal completed")
 	}
 
-	if hostEntryHost := strings.TrimSpace(appHost); hostEntryHost != "" {
-		hostEntry := hostsEntry{
-			Address: normalizeAddress(target.Host),
+	targetAddr := normalizeAddress(target.Host)
+	if targetAddr == "" {
+		targetAddr = "127.0.0.1"
+	}
+	hostEntryHost := strings.TrimSpace(appHost)
+	if hostEntryHost == "" {
+		return nil, fmt.Errorf("app_host is required")
+	}
+	hostEntries := []hostsEntry{
+		{
+			Address: targetAddr,
 			Host:    hostEntryHost,
-		}
-		if hostEntry.Address != "" {
-			logInstall(logFn, "hosts", "pre-healthcheck sync host %s -> %s", hostEntry.Host, hostEntry.Address)
-			_, warnings := syncHostsForTargets(ctx, []hostsEntry{hostEntry}, []moduleInstallTarget{target})
-			for _, warning := range warnings {
-				logInstall(logFn, "hosts", "[warn] %s", warning)
-			}
-		}
+		},
 	}
+	hostTargets := []moduleInstallTarget{
+		{
+			Scope:    ModuleInstallScopeLocal,
+			Username: "aurora",
+			Host:     "127.0.0.1",
+			Port:     22,
+		},
+	}
+	localAddr := normalizeAddress(detectLocalIPv4())
+	if !isLoopbackAddress(targetAddr) && !strings.EqualFold(targetAddr, localAddr) {
+		hostTargets = append(hostTargets, target)
+	}
+	hostTargets = dedupeTargets(hostTargets)
+	logInstall(logFn, "hosts", "sync app host /etc/hosts (required) host=%s address=%s targets=%d", hostEntryHost, targetAddr, len(hostTargets))
 
-	logInstall(logFn, "healthcheck", "checking endpoint health")
-	for _, candidate := range buildHealthcheckCandidates(endpoint) {
-		logInstall(logFn, "healthcheck", "candidate=%s", candidate)
-	}
-	healthcheckOutput, healthErr := ensureCurlAndCheckEndpoint(ctx, target, moduleName, endpoint, func(line string) {
-		logInstall(logFn, "healthcheck", "%s", line)
-	})
-	result.HealthcheckOutput = strings.TrimSpace(healthcheckOutput)
-	if healthErr != nil {
-		logInstall(logFn, "healthcheck", "[error] %v", healthErr)
-		return nil, fmt.Errorf("service healthcheck failed: %w", healthErr)
-	}
-	result.HealthcheckPassed = true
-	logInstall(logFn, "healthcheck", "healthcheck passed")
-
-	targets, err := s.resolveHostSyncTargets(target, endpoints.items, endpoints.err)
-	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("cannot load existing endpoint targets: %v", err))
-		targets = []moduleInstallTarget{target}
-		logInstall(logFn, "hosts", "[warn] cannot load existing endpoint targets: %v", err)
-	}
-
-	hostEntries, entryErr := s.buildHostsEntries(appHost, target.Host, endpoints.items, endpoints.err)
-	if entryErr != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("cannot build hosts entries: %v", entryErr))
-		hostEntries = []hostsEntry{{Address: normalizeAddress(target.Host), Host: strings.TrimSpace(appHost)}}
-		logInstall(logFn, "hosts", "[warn] cannot build hosts entries: %v", entryErr)
-	}
-	logInstall(logFn, "hosts", "sync /etc/hosts entries=%d targets=%d", len(hostEntries), len(targets))
-
-	hostsUpdated, warnings := syncHostsForTargets(ctx, hostEntries, targets)
+	hostsUpdated, hostWarnings := syncHostsForTargets(ctx, hostEntries, hostTargets)
 	result.HostsUpdated = hostsUpdated
-	result.Warnings = append(result.Warnings, warnings...)
-	if len(hostsUpdated) > 0 {
-		logInstall(logFn, "hosts", "hosts sync updated=%s", strings.Join(hostsUpdated, ","))
+	if len(hostWarnings) > 0 {
+		for _, warning := range hostWarnings {
+			logInstall(logFn, "hosts", "[error] %s", warning)
+		}
+		return nil, fmt.Errorf("sync app host to /etc/hosts failed")
 	}
-	for _, warning := range warnings {
-		logInstall(logFn, "hosts", "[warn] %s", warning)
+	if len(hostsUpdated) == 0 {
+		logInstall(logFn, "hosts", "[error] hosts sync produced no successful targets")
+		return nil, fmt.Errorf("sync app host to /etc/hosts failed")
 	}
+	logInstall(logFn, "hosts", "app host synced targets=%s", strings.Join(hostsUpdated, ","))
+
+	if seedErr := s.seedModuleTLSBundle(ctx, moduleName, tlsBundle); seedErr != nil {
+		logInstall(logFn, "tls", "[error] %v", seedErr)
+		return nil, fmt.Errorf("seed module tls bundle failed: %w", seedErr)
+	}
+	s.addModuleTLSRollbackStep(rollbacks, moduleName)
+	logInstall(logFn, "tls", "seeded module tls bundle into cert store")
+
+	endpointValue := encodeEndpointValue(target, endpoint)
+	result.EndpointValue = endpointValue
+	logInstall(logFn, "endpoint", "upsert endpoint key=%s", keycfg.EndpointKey(moduleName))
+	if err := s.endpointRepo.Upsert(ctx, moduleName, endpointValue); err != nil {
+		logInstall(logFn, "endpoint", "[error] %v", err)
+		return nil, err
+	}
+	rollbacks.Add("endpoint", func(rollbackCtx context.Context) error {
+		if s.endpointRepo == nil {
+			return nil
+		}
+		cleanupCtx, cancel := context.WithTimeout(rollbackCtx, 10*time.Second)
+		deleteErr := s.endpointRepo.Delete(cleanupCtx, moduleName)
+		cancel()
+		if deleteErr != nil {
+			return fmt.Errorf("endpoint cleanup failed (%s): %w", moduleName, deleteErr)
+		}
+		return nil
+	})
+	logInstall(logFn, "endpoint", "endpoint updated")
 
 	logInstall(logFn, "install", "[done] module install completed module=%s", moduleName)
 	rollbacks.Clear()

@@ -1,7 +1,6 @@
 package moduleinstall
 
 import (
-	"admin/internal/repository"
 	sshpkg "admin/pkg/ssh"
 	"context"
 	"encoding/base64"
@@ -12,110 +11,6 @@ import (
 	"strings"
 	"time"
 )
-
-func (s *ModuleInstallService) resolveHostSyncTargets(current moduleInstallTarget, items []repository.EndpointKV, listErr error) ([]moduleInstallTarget, error) {
-	if listErr != nil {
-		return nil, listErr
-	}
-
-	out := make([]moduleInstallTarget, 0, len(items)+2)
-	out = append(out, current)
-	out = append(out, moduleInstallTarget{
-		Scope:    ModuleInstallScopeLocal,
-		Username: "aurora",
-		Host:     "127.0.0.1",
-		Port:     22,
-	})
-
-	for _, item := range items {
-		target, ok := parseEndpointTarget(item.Value)
-		if !ok {
-			continue
-		}
-		out = append(out, target)
-	}
-	return dedupeTargets(out), nil
-}
-
-func (s *ModuleInstallService) buildHostsEntries(
-	currentHost string,
-	currentAddress string,
-	items []repository.EndpointKV,
-	listErr error,
-) ([]hostsEntry, error) {
-	entries := map[string]string{}
-	adminAddress := detectLocalIPv4()
-	normalizedCurrentHost := strings.TrimSpace(currentHost)
-	normalizedCurrentAddress := normalizeAddress(currentAddress)
-	if normalizedCurrentHost != "" && !isValidHost(normalizedCurrentHost) {
-		normalizedCurrentHost = ""
-	}
-	if normalizedCurrentHost != "" && normalizedCurrentAddress != "" {
-		entries[normalizedCurrentHost] = normalizedCurrentAddress
-	}
-
-	if listErr != nil {
-		return mapToHostsEntries(entries), listErr
-	}
-
-	for _, item := range items {
-		name := strings.Trim(strings.TrimSpace(item.Name), "/")
-		if strings.EqualFold(name, "admin") {
-			adminHost := endpointHostFromAnyValue(item.Value)
-			if adminHost != "" && isValidHost(adminHost) && adminAddress != "" {
-				entries[adminHost] = adminAddress
-			}
-		}
-
-		target, endpoint, ok := parseEndpointTargetAndEndpoint(item.Value)
-		if !ok {
-			continue
-		}
-		host := endpointHost(endpoint)
-		address := normalizeAddress(target.Host)
-		if host == "" || !isValidHost(host) || address == "" {
-			continue
-		}
-		old, exists := entries[host]
-		if exists && isLoopbackAddress(old) && !isLoopbackAddress(address) {
-			entries[host] = address
-			continue
-		}
-		if !exists {
-			entries[host] = address
-		}
-	}
-
-	return mapToHostsEntries(entries), nil
-}
-
-func (s *ModuleInstallService) resolveAdminHostsEntry(items []repository.EndpointKV, listErr error) (hostsEntry, bool) {
-	if s == nil || s.endpointRepo == nil {
-		return hostsEntry{}, false
-	}
-	adminAddress := normalizeAddress(detectLocalIPv4())
-	if adminAddress == "" {
-		return hostsEntry{}, false
-	}
-	if listErr != nil {
-		return hostsEntry{}, false
-	}
-	for _, item := range items {
-		name := strings.Trim(strings.TrimSpace(item.Name), "/")
-		if !strings.EqualFold(name, "admin") {
-			continue
-		}
-		adminHost := endpointHostFromAnyValue(item.Value)
-		if adminHost == "" || !isValidHost(adminHost) {
-			return hostsEntry{}, false
-		}
-		return hostsEntry{
-			Address: adminAddress,
-			Host:    adminHost,
-		}, true
-	}
-	return hostsEntry{}, false
-}
 
 func dedupeTargets(items []moduleInstallTarget) []moduleInstallTarget {
 	out := make([]moduleInstallTarget, 0, len(items))
@@ -177,7 +72,7 @@ func syncHostsForTargets(
 			for _, entry := range entries {
 				cmd := buildHostsUpdateCommand(entry.Address, entry.Host, target.Password)
 				runCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-				_, err := sshpkg.Run(runCtx, sshpkg.RunInput{
+				runResult, err := sshpkg.Run(runCtx, sshpkg.RunInput{
 					Host:               target.Host,
 					Port:               target.Port,
 					Username:           target.Username,
@@ -190,6 +85,15 @@ func syncHostsForTargets(
 				cancel()
 				if err != nil {
 					hasErr = true
+					detail := ""
+					if runResult != nil {
+						detail = strings.TrimSpace(runResult.Output)
+					}
+					if detail != "" {
+						detail = strings.Join(strings.Fields(detail), " ")
+						warnings = append(warnings, fmt.Sprintf("remote hosts update failed (%s/%s): %v (%s)", target.Host, entry.Host, err, detail))
+						continue
+					}
 					warnings = append(warnings, fmt.Sprintf("remote hosts update failed (%s/%s): %v", target.Host, entry.Host, err))
 				}
 			}
@@ -229,20 +133,4 @@ func buildHostsUpdateScript(address, host string, sudoPassword *string) string {
 		shellEscape(address),
 		shellEscape(host),
 	)
-}
-
-func endpointHostFromAnyValue(raw string) string {
-	if _, endpoint, ok := parseEndpointTargetAndEndpoint(raw); ok {
-		return endpointHost(endpoint)
-	}
-
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return ""
-	}
-	_, endpoint, ok := strings.Cut(value, ":")
-	if !ok {
-		return ""
-	}
-	return endpointHost(endpoint)
 }
