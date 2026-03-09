@@ -118,6 +118,8 @@ func NewModules(
 	moduleInstallSvc := installsvc.NewModuleInstallService(
 		enabledModuleRepo,
 		runtimeRepo,
+		certStoreRepo,
+		cfg.CertStore.Prefix,
 		cfg.Database.URL,
 		cfg.ModuleInstall.UMSInstallScriptURL,
 		cfg.ModuleInstall.PlatformInstallScriptURL,
@@ -125,7 +127,7 @@ func NewModules(
 		cfg.ModuleInstall.DBaaSInstallScriptURL,
 		cfg.ModuleInstall.UIInstallScriptURL,
 	)
-	runtimeSvc := apisvc.NewRuntimeBootstrapService(runtimeRepo, enabledModuleRepo)
+	runtimeSvc := apisvc.NewRuntimeBootstrapService(runtimeRepo, enabledModuleRepo, certStoreRepo, cfg.CertStore.Prefix)
 
 	return &Modules{
 		Etcd:             etcdClient,

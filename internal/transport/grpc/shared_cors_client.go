@@ -3,16 +3,17 @@ package grpc
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -41,32 +42,25 @@ func (c *sharedCORSClient) ApplySharedCORS(
 	if err != nil {
 		return err
 	}
+	tlsCfg, err := buildSharedCORSTLSConfig(serverName)
+	if err != nil {
+		return err
+	}
 
 	req, err := buildSharedCORSRequest(corsValues)
 	if err != nil {
 		return err
 	}
 
-	// Do not force mTLS here; try h2c first, then one-way TLS.
-	opts := []grpc.DialOption{
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
-			MinVersion:         tls.VersionTLS12,
-			ServerName:         strings.TrimSpace(serverName),
-			InsecureSkipVerify: true,
-		})),
+	if err := invokeSharedCORS(
+		ctx,
+		dialAddress,
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+		req,
+	); err != nil {
+		return fmt.Errorf("shared cors rpc push failed: %w", err)
 	}
-
-	var errs []string
-	for _, dialOpt := range opts {
-		callErr := invokeSharedCORS(ctx, dialAddress, dialOpt, req)
-		if callErr == nil {
-			return nil
-		}
-		errs = append(errs, callErr.Error())
-	}
-
-	return fmt.Errorf("shared cors rpc push failed: %s", strings.Join(errs, " | "))
+	return nil
 }
 
 func buildSharedCORSRequest(corsValues map[string]string) (*structpb.Struct, error) {
@@ -145,7 +139,7 @@ func resolveGRPCDialAddress(endpoint string) (address string, serverName string,
 			case "https", "grpcs", "tls":
 				port = "443"
 			default:
-				port = "80"
+				return "", "", fmt.Errorf("shared cors rpc requires tls endpoint")
 			}
 		}
 		return net.JoinHostPort(host, port), host, nil
@@ -157,6 +151,9 @@ func resolveGRPCDialAddress(endpoint string) (address string, serverName string,
 		if cleanHost == "" || cleanPort == "" {
 			return "", "", fmt.Errorf("endpoint host/port is invalid")
 		}
+		if cleanPort == "80" {
+			return "", "", fmt.Errorf("shared cors rpc requires tls endpoint")
+		}
 		return net.JoinHostPort(cleanHost, cleanPort), cleanHost, nil
 	}
 
@@ -165,7 +162,31 @@ func resolveGRPCDialAddress(endpoint string) (address string, serverName string,
 	if host == "" || port == "" {
 		return "", "", fmt.Errorf("endpoint must be host:port")
 	}
+	if port == "80" {
+		return "", "", fmt.Errorf("shared cors rpc requires tls endpoint")
+	}
 	return net.JoinHostPort(host, port), host, nil
+}
+
+func buildSharedCORSTLSConfig(serverName string) (*tls.Config, error) {
+	caPEM, err := os.ReadFile("/etc/aurora/certs/ca.crt")
+	if err != nil {
+		return nil, fmt.Errorf("read shared cors ca failed: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("invalid shared cors ca pem")
+	}
+	cert, err := tls.LoadX509KeyPair("/etc/aurora/certs/admin.crt", "/etc/aurora/certs/admin.key")
+	if err != nil {
+		return nil, fmt.Errorf("load shared cors client cert/key failed: %w", err)
+	}
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		ServerName:   strings.TrimSpace(serverName),
+		RootCAs:      pool,
+		Certificates: []tls.Certificate{cert},
+	}, nil
 }
 
 func endpointHost(raw string) string {

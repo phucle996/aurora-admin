@@ -57,7 +57,7 @@ func installModuleTLSOnTarget(
 	appHost string,
 	endpoint string,
 	logFn InstallLogFn,
-) error {
+) (*moduleTLSBundle, error) {
 	paths := resolveModuleTLSPaths(moduleName)
 	host := resolveTLSHost(endpoint, appHost)
 	if host == "" {
@@ -67,7 +67,7 @@ func installModuleTLSOnTarget(
 	logInstall(logFn, "tls", "generate tls cert host=%s module=%s (signed by admin CA)", host, moduleName)
 	bundle, err := generateModuleTLSBundle(host, moduleName)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	certB64 := base64.StdEncoding.EncodeToString(bundle.CertPEM)
@@ -100,7 +100,7 @@ func installModuleTLSOnTarget(
 		`  tmp="$(mktemp)"`,
 		`  printf '%s' "$payload" | base64 -d > "$tmp"`,
 		`  ensure_root mkdir -p "$(dirname "$path")"`,
-		`  ensure_root install -m 0400 -o "$owner_user" -g "$owner_group" "$tmp" "$path"`,
+		`  ensure_root install -m 0600 -o "$owner_user" -g "$owner_group" "$tmp" "$path"`,
 		`  rm -f "$tmp"`,
 		"}",
 		"write_file " + shellEscape(paths.CertPath) + " " + shellEscape(certB64),
@@ -115,14 +115,14 @@ func installModuleTLSOnTarget(
 		logInstall(logFn, "tls", "%s", line)
 	})
 	if runErr != nil {
-		return fmt.Errorf("push tls materials failed (exit_code=%d): %w", exitCode, runErr)
+		return nil, fmt.Errorf("push tls materials failed (exit_code=%d): %w", exitCode, runErr)
 	}
 	if strings.TrimSpace(output) == "" {
 		logInstall(logFn, "tls", "tls material command completed")
 	}
 
 	logInstall(logFn, "tls", "tls installed cert=%s key=%s ca=%s", paths.CertPath, paths.KeyPath, paths.CAPath)
-	return nil
+	return bundle, nil
 }
 
 func generateModuleTLSBundle(host string, moduleName string) (*moduleTLSBundle, error) {

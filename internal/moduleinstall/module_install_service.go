@@ -76,9 +76,11 @@ type endpointListSnapshot struct {
 }
 
 type ModuleInstallService struct {
-	endpointRepo repository.EndpointRepository
-	runtimeRepo  repository.RuntimeConfigRepository
-	databaseURL  string
+	endpointRepo    repository.EndpointRepository
+	runtimeRepo     repository.RuntimeConfigRepository
+	certStoreRepo   repository.CertStoreRepository
+	certStorePrefix string
+	databaseURL     string
 
 	umsInstallScriptURL      string
 	platformInstallScriptURL string
@@ -92,6 +94,8 @@ type InstallLogFn func(stage, message string)
 func NewModuleInstallService(
 	endpointRepo repository.EndpointRepository,
 	runtimeRepo repository.RuntimeConfigRepository,
+	certStoreRepo repository.CertStoreRepository,
+	certStorePrefix string,
 	databaseURL string,
 	umsInstallScriptURL string,
 	platformInstallScriptURL string,
@@ -102,6 +106,8 @@ func NewModuleInstallService(
 	return &ModuleInstallService{
 		endpointRepo:             endpointRepo,
 		runtimeRepo:              runtimeRepo,
+		certStoreRepo:            certStoreRepo,
+		certStorePrefix:          strings.TrimSpace(certStorePrefix),
 		databaseURL:              strings.TrimSpace(databaseURL),
 		umsInstallScriptURL:      strings.TrimSpace(umsInstallScriptURL),
 		platformInstallScriptURL: strings.TrimSpace(platformInstallScriptURL),
@@ -112,7 +118,7 @@ func NewModuleInstallService(
 }
 
 func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleInstallRequest, logFn InstallLogFn) (result *ModuleInstallResult, err error) {
-	if s == nil || s.endpointRepo == nil || s.runtimeRepo == nil {
+	if s == nil || s.endpointRepo == nil || s.runtimeRepo == nil || s.certStoreRepo == nil {
 		return nil, errorvar.ErrModuleInstallServiceNil
 	}
 
@@ -205,10 +211,17 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 		return nil, errorvar.ErrModuleInstallerMissing
 	}
 
-	if tlsErr := installModuleTLSOnTarget(ctx, target, moduleName, appHost, endpoint, logFn); tlsErr != nil {
+	tlsBundle, tlsErr := installModuleTLSOnTarget(ctx, target, moduleName, appHost, endpoint, logFn)
+	if tlsErr != nil {
 		logInstall(logFn, "tls", "[error] %v", tlsErr)
 		return nil, fmt.Errorf("install tls materials failed: %w", tlsErr)
 	}
+	if seedErr := s.seedModuleTLSBundle(ctx, moduleName, tlsBundle); seedErr != nil {
+		logInstall(logFn, "tls", "[error] %v", seedErr)
+		return nil, fmt.Errorf("seed module tls bundle failed: %w", seedErr)
+	}
+	s.addModuleTLSRollbackStep(rollbacks, moduleName)
+	logInstall(logFn, "tls", "seeded module tls bundle into cert store")
 
 	if adminHostEntry, ok := s.resolveAdminHostsEntry(endpoints.items, endpoints.err); ok {
 		logInstall(logFn, "hosts", "pre-sync admin host %s -> %s", adminHostEntry.Host, adminHostEntry.Address)

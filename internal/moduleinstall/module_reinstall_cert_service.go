@@ -30,7 +30,7 @@ func (s *ModuleInstallService) ReinstallCertWithLog(
 	req ModuleReinstallCertRequest,
 	logFn InstallLogFn,
 ) (*ModuleReinstallCertResult, error) {
-	if s == nil || s.endpointRepo == nil {
+	if s == nil || s.endpointRepo == nil || s.certStoreRepo == nil {
 		return nil, errorvar.ErrModuleInstallServiceNil
 	}
 
@@ -67,9 +67,14 @@ func (s *ModuleInstallService) ReinstallCertWithLog(
 	logInstall(logFn, "reinstall-cert", "start module=%s endpoint=%s target=%s", moduleName, endpoint, target.Host)
 	logInstall(logFn, "reinstall-cert", "resolved tls host=%s (from endpoint registry)", appHost)
 
-	if err := installModuleTLSOnTarget(ctx, target, moduleName, appHost, endpoint, logFn); err != nil {
+	bundle, err := installModuleTLSOnTarget(ctx, target, moduleName, appHost, endpoint, logFn)
+	if err != nil {
 		logInstall(logFn, "reinstall-cert", "[error] %v", err)
 		return nil, fmt.Errorf("reinstall cert failed: %w", err)
+	}
+	if err := s.seedModuleTLSBundle(ctx, moduleName, bundle); err != nil {
+		logInstall(logFn, "reinstall-cert", "[error] %v", err)
+		return nil, fmt.Errorf("seed module tls bundle failed: %w", err)
 	}
 	logInstall(logFn, "reinstall-cert", "tls materials reinstalled cert=%s key=%s ca=%s", tlsPaths.CertPath, tlsPaths.KeyPath, tlsPaths.CAPath)
 

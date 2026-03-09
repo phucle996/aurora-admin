@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 type RuntimeBootstrapRequest struct {
@@ -19,8 +21,10 @@ type RuntimeBootstrapRequest struct {
 }
 
 type RuntimeBootstrapService struct {
-	runtimeRepo  repository.RuntimeConfigRepository
-	endpointRepo repository.EndpointRepository
+	runtimeRepo     repository.RuntimeConfigRepository
+	endpointRepo    repository.EndpointRepository
+	certStoreRepo   repository.CertStoreRepository
+	certStorePrefix string
 }
 
 type bootstrapValueSource string
@@ -45,10 +49,14 @@ type endpointRuntimeDependency struct {
 func NewRuntimeBootstrapService(
 	runtimeRepo repository.RuntimeConfigRepository,
 	endpointRepo repository.EndpointRepository,
+	certStoreRepo repository.CertStoreRepository,
+	certStorePrefix string,
 ) *RuntimeBootstrapService {
 	return &RuntimeBootstrapService{
-		runtimeRepo:  runtimeRepo,
-		endpointRepo: endpointRepo,
+		runtimeRepo:     runtimeRepo,
+		endpointRepo:    endpointRepo,
+		certStoreRepo:   certStoreRepo,
+		certStorePrefix: strings.TrimSpace(certStorePrefix),
 	}
 }
 
@@ -56,7 +64,7 @@ func (s *RuntimeBootstrapService) BuildRuntimeValues(
 	ctx context.Context,
 	req RuntimeBootstrapRequest,
 ) (map[string]string, error) {
-	if s == nil || s.runtimeRepo == nil || s.endpointRepo == nil {
+	if s == nil || s.runtimeRepo == nil || s.endpointRepo == nil || s.certStoreRepo == nil {
 		return nil, fmt.Errorf("runtime bootstrap service is nil")
 	}
 
@@ -80,6 +88,19 @@ func (s *RuntimeBootstrapService) BuildRuntimeValues(
 	m1, e1 := applySpecs(runtimeSpecs, runtimeLoaded, values)
 	missing = append(missing, m1...)
 	empty = append(empty, e1...)
+
+	certValues, certErr := s.loadModuleTLSBundle(ctx, moduleName)
+	if certErr != nil {
+		return nil, certErr
+	}
+	for outputKey, certValue := range certValues {
+		trimmed := strings.TrimSpace(certValue)
+		if trimmed == "" {
+			empty = append(empty, "cert_store/"+outputKey)
+			continue
+		}
+		values[outputKey] = trimmed
+	}
 
 	if err := buildBootstrapValidationError(missing, empty); err != nil {
 		return nil, err
@@ -347,7 +368,10 @@ func (s *RuntimeBootstrapService) resolveModuleBaseURL(ctx context.Context, modu
 		if endpoint == "" {
 			continue
 		}
-		if strings.HasPrefix(endpoint, "https://") || strings.HasPrefix(endpoint, "http://") {
+		if strings.HasPrefix(endpoint, "http://") {
+			return "", fmt.Errorf("%s endpoint must use https for mTLS", targetName)
+		}
+		if strings.HasPrefix(endpoint, "https://") {
 			return strings.TrimRight(endpoint, "/"), nil
 		}
 		return "https://" + strings.TrimRight(endpoint, "/"), nil
@@ -370,9 +394,6 @@ func toGRPCEndpoint(baseURL string) string {
 			if _, _, splitErr := net.SplitHostPort(host); splitErr == nil {
 				return host
 			}
-			if strings.EqualFold(parsed.Scheme, "http") {
-				return net.JoinHostPort(host, "80")
-			}
 			return net.JoinHostPort(host, "443")
 		}
 	}
@@ -384,4 +405,47 @@ func toGRPCEndpoint(baseURL string) string {
 		return host
 	}
 	return net.JoinHostPort(host, "443")
+}
+
+func runtimeBootstrapTLSObjectID(moduleName string) uuid.UUID {
+	name := normalizeBootstrapModuleName(moduleName)
+	if name == "" {
+		name = strings.Trim(strings.TrimSpace(moduleName), "/")
+	}
+	if name == "" {
+		name = "service"
+	}
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte("module-install:"+name))
+}
+
+func runtimeBootstrapTLSStoreKey(prefix string, objectID uuid.UUID, certType string) string {
+	base := strings.TrimRight(strings.TrimSpace(prefix), "/")
+	key := objectID.String() + "-" + strings.TrimSpace(certType)
+	if base == "" {
+		return key
+	}
+	return base + "/" + key
+}
+
+func (s *RuntimeBootstrapService) loadModuleTLSBundle(ctx context.Context, moduleName string) (map[string]string, error) {
+	if s == nil || s.certStoreRepo == nil {
+		return nil, fmt.Errorf("cert store repository is nil")
+	}
+
+	objectID := runtimeBootstrapTLSObjectID(moduleName)
+	caKey := runtimeBootstrapTLSStoreKey(s.certStorePrefix, objectID, "ca")
+	clientCertKey := runtimeBootstrapTLSStoreKey(s.certStorePrefix, objectID, "client_cert")
+	clientKeyKey := runtimeBootstrapTLSStoreKey(s.certStorePrefix, objectID, "private_client")
+
+	loaded, err := s.certStoreRepo.GetMany(ctx, []string{caKey, clientCertKey, clientKeyKey})
+	if err != nil {
+		return nil, fmt.Errorf("load cert store keys failed: %w", err)
+	}
+
+	values := map[string]string{
+		"tls/ca_pem":          strings.TrimSpace(loaded[caKey]),
+		"tls/client_cert_pem": strings.TrimSpace(loaded[clientCertKey]),
+		"tls/client_key_pem":  strings.TrimSpace(loaded[clientKeyKey]),
+	}
+	return values, nil
 }
