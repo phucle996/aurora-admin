@@ -278,34 +278,25 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 			Host:    hostEntryHost,
 		},
 	}
-	hostTargets := []moduleInstallTarget{
-		{
-			Scope:    ModuleInstallScopeLocal,
-			Username: "aurora",
-			Host:     "127.0.0.1",
-			Port:     22,
-		},
-	}
-	localAddr := normalizeAddress(detectLocalIPv4())
-	if !isLoopbackAddress(targetAddr) && !strings.EqualFold(targetAddr, localAddr) {
-		hostTargets = append(hostTargets, target)
-	}
-	hostTargets = dedupeTargets(hostTargets)
-	logInstall(logFn, "hosts", "sync app host /etc/hosts (required) host=%s address=%s targets=%d", hostEntryHost, targetAddr, len(hostTargets))
+	hostTargets := []moduleInstallTarget{target}
+	logInstall(logFn, "hosts", "sync app host /etc/hosts on target (required) host=%s address=%s target=%s", hostEntryHost, targetAddr, target.Host)
 
-	hostsUpdated, hostWarnings := syncHostsForTargets(ctx, hostEntries, hostTargets)
+	hostsUpdated, hostWarnings := syncHostsForTargets(ctx, hostEntries, dedupeTargets(hostTargets))
 	result.HostsUpdated = hostsUpdated
-	if len(hostWarnings) > 0 {
+	result.Warnings = append(result.Warnings, hostWarnings...)
+	if len(hostsUpdated) == 0 {
 		for _, warning := range hostWarnings {
 			logInstall(logFn, "hosts", "[error] %s", warning)
 		}
-		return nil, fmt.Errorf("sync app host to /etc/hosts failed")
-	}
-	if len(hostsUpdated) == 0 {
-		logInstall(logFn, "hosts", "[error] hosts sync produced no successful targets")
+		if len(hostWarnings) == 0 {
+			logInstall(logFn, "hosts", "[error] no host entries were updated on target")
+		}
 		return nil, fmt.Errorf("sync app host to /etc/hosts failed")
 	}
 	logInstall(logFn, "hosts", "app host synced targets=%s", strings.Join(hostsUpdated, ","))
+	for _, warning := range hostWarnings {
+		logInstall(logFn, "hosts", "[warn] %s", warning)
+	}
 
 	if seedErr := s.seedModuleTLSBundle(ctx, moduleName, tlsBundle); seedErr != nil {
 		logInstall(logFn, "tls", "[error] %v", seedErr)
