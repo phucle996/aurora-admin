@@ -3,7 +3,6 @@ package moduleinstall
 import (
 	sshpkg "admin/pkg/ssh"
 	"context"
-	"encoding/base64"
 	"fmt"
 	"os/exec"
 	"sort"
@@ -122,9 +121,9 @@ func buildHostsUpdateCommand(address, host string, sudoPassword *string) string 
 }
 
 func buildHostsUpdateScript(address, host string, sudoPassword *string) string {
-	sudoPasswordB64 := ""
+	sudoPasswordValue := ""
 	if sudoPassword != nil {
-		sudoPasswordB64 = base64.StdEncoding.EncodeToString([]byte(*sudoPassword))
+		sudoPasswordValue = *sudoPassword
 	}
 	hostPattern := fmt.Sprintf("(^|[[:space:]])%s([[:space:]]|$)", regexpEscape(host))
 	updateCmd := fmt.Sprintf(
@@ -135,8 +134,8 @@ func buildHostsUpdateScript(address, host string, sudoPassword *string) string {
 		shellEscape(host),
 	)
 	return fmt.Sprintf(
-		`set -e; sudo_pw_b64=%s; sudo_pw=""; if [ -n "$sudo_pw_b64" ]; then sudo_pw="$(printf '%%s' "$sudo_pw_b64" | base64 -d 2>/dev/null || true)"; fi; update_cmd=%s; if [ "$(id -u)" -eq 0 ]; then sh -lc "$update_cmd"; exit $?; fi; if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then sudo -n sh -lc "$update_cmd"; exit $?; fi; if command -v sudo >/dev/null 2>&1 && [ -n "$sudo_pw" ]; then printf '%%s\n' "$sudo_pw" | sudo -S -k sh -lc "$update_cmd"; exit $?; fi; echo "need sudo privilege to write /etc/hosts" >&2; exit 1`,
-		shellEscape(sudoPasswordB64),
+		`set -e; sudo_pw=%s; update_cmd=%s; if [ "$(id -u)" -eq 0 ]; then sh -lc "$update_cmd"; exit $?; fi; if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then sudo -n sh -lc "$update_cmd"; exit $?; fi; if command -v sudo >/dev/null 2>&1 && [ -n "$sudo_pw" ]; then printf '%%s\n' "$sudo_pw" | sudo -S -k sh -lc "$update_cmd"; exit $?; fi; echo "need sudo privilege to write /etc/hosts" >&2; exit 1`,
+		shellEscape(sudoPasswordValue),
 		shellEscape(updateCmd),
 	)
 }
