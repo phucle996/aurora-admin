@@ -53,6 +53,7 @@ func NewApplication(cfg *config.Config) (*App, error) {
 		modules.EnabledModuleSvc,
 		modules.ModuleInstallSvc,
 		modules.RuntimeSvc,
+		cfg.App.Port,
 	)
 	// --------------------
 	// gin http framework

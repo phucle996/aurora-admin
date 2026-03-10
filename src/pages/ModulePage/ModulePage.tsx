@@ -3,10 +3,12 @@ import { useTheme } from "next-themes";
 import { toast } from "sonner";
 
 import {
+  getAgentInstallBootstrapMetadata,
   installModuleStream,
   listModuleInstallAgents,
   rotateAgentBootstrapToken,
   reinstallModuleCertStream,
+  type AgentInstallBootstrapMetadata,
   type ModuleInstallAgent,
   type ModuleInstallResult,
   type ModuleInstallScope,
@@ -36,6 +38,7 @@ export default function ModulePage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [agentSearchQuery, setAgentSearchQuery] = useState("");
   const [agentBootstrapToken, setAgentBootstrapToken] = useState("");
+  const [agentBootstrapMeta, setAgentBootstrapMeta] = useState<AgentInstallBootstrapMetadata | null>(null);
 
   const [installDialogOpen, setInstallDialogOpen] = useState(false);
   const [installSubmitting, setInstallSubmitting] = useState(false);
@@ -43,12 +46,7 @@ export default function ModulePage() {
     null,
   );
   const [installScope] = useState<ModuleInstallScope>("remote");
-  const [installRuntime, setInstallRuntime] = useState<"linux" | "k8s">("linux");
-  const [installCommand, setInstallCommand] = useState("");
-  const [kubeconfig, setKubeconfig] = useState("");
-  const [kubeconfigPath, setKubeconfigPath] = useState("");
   const [appHost, setAppHost] = useState("");
-  const [appPort, setAppPort] = useState("");
   const [selectedAgentID, setSelectedAgentID] = useState("");
   const [installAgents, setInstallAgents] = useState<ModuleInstallAgent[]>([]);
   const [installAgentsLoading, setInstallAgentsLoading] = useState(false);
@@ -85,26 +83,46 @@ export default function ModulePage() {
   }, [cards, searchQuery]);
 
   const agentInstallScript = useMemo(() => {
-    const defaultEndpoint = "https://admin.aurora.local";
+    const grpcEndpoint = agentBootstrapMeta?.admin_grpc_endpoint.trim() || "";
+    const serverName = agentBootstrapMeta?.admin_server_name.trim() || "";
     const tokenSegment = agentBootstrapToken.trim()
       ? ` --bootstrap-token '${agentBootstrapToken.trim()}'`
       : "";
-    if (typeof window === "undefined") {
+    const endpointSegment = grpcEndpoint
+      ? ` --admin-grpc-endpoint ${grpcEndpoint}`
+      : "";
+    const serverNameSegment = serverName
+      ? ` --admin-server-name ${serverName}`
+      : "";
+    if (!endpointSegment) {
       return [
         "curl -fsSL https://raw.githubusercontent.com/phucle996/aurora-agent/main/scripts/install.sh -o install.sh",
         "chmod +x install.sh",
-        `sudo ./install.sh --admin-grpc-endpoint ${defaultEndpoint}${tokenSegment}`,
+        "# missing admin grpc direct endpoint metadata; refresh Runtime Module page",
       ].join("\n");
     }
-
-    const host = window.location.hostname || "admin.aurora.local";
-    const endpoint = `https://${host}`;
     return [
       "curl -fsSL https://raw.githubusercontent.com/phucle996/aurora-agent/main/scripts/install.sh -o install.sh",
       "chmod +x install.sh",
-      `sudo ./install.sh --admin-grpc-endpoint ${endpoint}${tokenSegment}`,
+      `sudo ./install.sh${endpointSegment}${serverNameSegment}${tokenSegment}`,
     ].join("\n");
-  }, [agentBootstrapToken]);
+  }, [agentBootstrapMeta, agentBootstrapToken]);
+
+  const refreshAgentBootstrapMetadata = (silent = false) => {
+    return getAgentInstallBootstrapMetadata()
+      .then((meta) => {
+        setAgentBootstrapMeta(meta);
+      })
+      .catch((err) => {
+        const message =
+          err instanceof Error && err.message.trim()
+            ? err.message
+            : "Khong the tai bootstrap metadata";
+        if (!silent) {
+          toast.error(message);
+        }
+      });
+  };
 
   const refreshInstallAgents = (silent = false) => {
     setInstallAgentsLoading(true);
@@ -112,14 +130,12 @@ export default function ModulePage() {
       .then((items) => {
         setInstallAgents(items);
         if (!selectedAgentID.trim()) {
-          const connected = items.find((agent) => agent.status === "connected");
-          setSelectedAgentID((connected ?? items[0])?.agent_id || "");
+          setSelectedAgentID(items[0]?.agent_id || "");
           return;
         }
         const stillExists = items.some((agent) => agent.agent_id === selectedAgentID);
         if (!stillExists) {
-          const connected = items.find((agent) => agent.status === "connected");
-          setSelectedAgentID((connected ?? items[0])?.agent_id || "");
+          setSelectedAgentID(items[0]?.agent_id || "");
         }
       })
       .catch((err) => {
@@ -144,6 +160,7 @@ export default function ModulePage() {
     void Promise.all([
       refreshModules({ force: true }),
       refreshInstallAgents(true),
+      refreshAgentBootstrapMetadata(true),
     ]).catch(() => {
       toast.error("Khong the tai du lieu runtime");
     });
@@ -154,6 +171,7 @@ export default function ModulePage() {
     void Promise.all([
       refreshModules({ force: true }),
       refreshInstallAgents(true),
+      refreshAgentBootstrapMetadata(true),
     ])
       .then(() => {
         toast.success("Da cap nhat runtime + agent");
@@ -171,6 +189,9 @@ export default function ModulePage() {
           throw new Error("bootstrap token response is empty");
         }
         setAgentBootstrapToken(token);
+        if (!agentBootstrapMeta?.admin_grpc_endpoint.trim()) {
+          void refreshAgentBootstrapMetadata(true);
+        }
         toast.success("Da tao bootstrap token moi");
       })
       .catch((err) => {
@@ -189,14 +210,8 @@ export default function ModulePage() {
 
     setInstallTarget(item);
     setAppHost(defaultHost);
-    setAppPort("");
-    setInstallRuntime("linux");
-    setInstallCommand("");
-    setKubeconfig("");
-    setKubeconfigPath("");
     if (!selectedAgentID.trim() && installAgents.length > 0) {
-      const connected = installAgents.find((agent) => agent.status === "connected");
-      setSelectedAgentID((connected ?? installAgents[0]).agent_id);
+      setSelectedAgentID(installAgents[0].agent_id);
     }
     setInstallDialogOpen(true);
     if (installAgents.length === 0 && !installAgentsLoading) {
@@ -215,37 +230,14 @@ export default function ModulePage() {
 
     const moduleName = installTarget.sourceName || installTarget.moduleKey;
     const normalizedAppHost = appHost.trim();
-    const normalizedAppPort = appPort.trim();
 
     if (!normalizedAppHost) {
       toast.error("app host la bat buoc");
       return;
     }
-    if (normalizedAppPort) {
-      const parsedPort = Number.parseInt(normalizedAppPort, 10);
-      if (
-        !Number.isInteger(parsedPort) ||
-        parsedPort <= 0 ||
-        parsedPort > 65535
-      ) {
-        toast.error("app port phai trong khoang 1..65535");
-        return;
-      }
-    }
 
     if (!selectedAgentID.trim()) {
       toast.error("Hay chon agent de install");
-      return;
-    }
-    const normalizedInstallCommand = installCommand.trim();
-    const normalizedKubeconfig = kubeconfig.trim();
-    const normalizedKubeconfigPath = kubeconfigPath.trim();
-    if (installRuntime === "k8s" && !normalizedInstallCommand) {
-      toast.error("K8s runtime yeu cau install command");
-      return;
-    }
-    if (installRuntime === "k8s" && !normalizedKubeconfig && !normalizedKubeconfigPath) {
-      toast.error("K8s runtime yeu cau kubeconfig inline hoac kubeconfig path");
       return;
     }
 
@@ -264,15 +256,9 @@ export default function ModulePage() {
         {
           module_name: moduleName,
           scope: installScope,
-          install_runtime: installRuntime,
+          install_runtime: "linux",
           agent_id: selectedAgentID.trim(),
           app_host: normalizedAppHost,
-          app_port: normalizedAppPort
-            ? Number.parseInt(normalizedAppPort, 10)
-            : undefined,
-          install_command: normalizedInstallCommand || undefined,
-          kubeconfig: normalizedKubeconfig || undefined,
-          kubeconfig_path: normalizedKubeconfigPath || undefined,
         },
         {
           onLog: (stage, message) => {
@@ -402,21 +388,11 @@ export default function ModulePage() {
         installSubmitting={installSubmitting}
         installTarget={installTarget}
         appHost={appHost}
-        appPort={appPort}
-        installRuntime={installRuntime}
-        installCommand={installCommand}
-        kubeconfig={kubeconfig}
-        kubeconfigPath={kubeconfigPath}
         selectedAgentID={selectedAgentID}
         installAgents={installAgents}
         installAgentsLoading={installAgentsLoading}
         onOpenChange={setInstallDialogOpen}
         onAppHostChange={setAppHost}
-        onAppPortChange={setAppPort}
-        onInstallRuntimeChange={setInstallRuntime}
-        onInstallCommandChange={setInstallCommand}
-        onKubeconfigChange={setKubeconfig}
-        onKubeconfigPathChange={setKubeconfigPath}
         onSelectedAgentIDChange={setSelectedAgentID}
         onInstall={handleInstall}
       />

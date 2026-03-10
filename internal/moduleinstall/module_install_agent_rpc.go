@@ -21,12 +21,11 @@ import (
 const agentRunCommandMethodPath = "/aurora.agent.v1.AgentService/RunCommand"
 
 type agentRunCommandRequest struct {
-	Command        string            `json:"command"`
-	TimeoutSeconds int32             `json:"timeout_seconds,omitempty"`
-	InstallRuntime string            `json:"install_runtime,omitempty"`
-	Kubeconfig     string            `json:"kubeconfig,omitempty"`
-	KubeconfigPath string            `json:"kubeconfig_path,omitempty"`
-	Env            map[string]string `json:"env,omitempty"`
+	Command        string `json:"command"`
+	TimeoutSeconds int32  `json:"timeout_seconds,omitempty"`
+	InstallRuntime string `json:"install_runtime,omitempty"`
+	Kubeconfig     string `json:"kubeconfig,omitempty"`
+	KubeconfigPath string `json:"kubeconfig_path,omitempty"`
 }
 
 type agentRunCommandResponse struct {
@@ -135,7 +134,7 @@ func runCommandOnAgent(
 	callCtx, cancelCall := context.WithTimeout(ctx, timeout+10*time.Second)
 	defer cancelCall()
 	if err := conn.Invoke(callCtx, agentRunCommandMethodPath, req, res); err != nil {
-		return "", -1, fmt.Errorf("invoke agent run command failed: %w", err)
+		return "", -1, classifyAgentRPCInvokeError(err)
 	}
 
 	output := strings.TrimRight(strings.ReplaceAll(res.Output, "\r\n", "\n"), "\n")
@@ -202,4 +201,24 @@ func buildAgentRPCDialTLSConfig(endpoint string) (*tls.Config, error) {
 		tlsCfg.ServerName = serverName
 	}
 	return tlsCfg, nil
+}
+
+func classifyAgentRPCInvokeError(err error) error {
+	if err == nil {
+		return nil
+	}
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	if strings.Contains(message, "certificate signed by unknown authority") {
+		return fmt.Errorf(
+			"invoke agent run command failed: mTLS verification failed between admin and agent; agent certificate is not trusted by current admin CA (re-bootstrap/reinstall agent to rotate cert with current CA): %w",
+			err,
+		)
+	}
+	if strings.Contains(message, "tls: bad certificate") {
+		return fmt.Errorf(
+			"invoke agent run command failed: mTLS verification failed between admin and agent (admin client certificate rejected by agent); ensure both sides use the same Aurora Admin CA: %w",
+			err,
+		)
+	}
+	return fmt.Errorf("invoke agent run command failed: %w", err)
 }

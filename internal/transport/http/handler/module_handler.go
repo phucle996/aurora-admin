@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -24,6 +26,7 @@ type EnabledModuleHandler struct {
 	Svc       *service.EnabledModuleService
 	InstallSv *installsvc.ModuleInstallService
 	RuntimeSv *service.RuntimeBootstrapService
+	AppPort   int
 }
 
 const (
@@ -36,11 +39,13 @@ func NewEnabledModuleHandler(
 	svc *service.EnabledModuleService,
 	installSvc *installsvc.ModuleInstallService,
 	runtimeSvc *service.RuntimeBootstrapService,
+	appPort int,
 ) *EnabledModuleHandler {
 	return &EnabledModuleHandler{
 		Svc:       svc,
 		InstallSv: installSvc,
 		RuntimeSv: runtimeSvc,
+		AppPort:   appPort,
 	}
 }
 
@@ -266,12 +271,7 @@ func (h *EnabledModuleHandler) InstallAgents(c *gin.Context) {
 			AgentID:           item.AgentID,
 			Status:            item.Status,
 			Hostname:          item.Hostname,
-			IPAddress:         item.IPAddress,
 			AgentGRPCEndpoint: item.AgentGRPCEndpoint,
-			LastSeenAt:        item.LastSeenAt,
-			Host:              item.Host,
-			Port:              item.Port,
-			Username:          item.Username,
 		})
 	}
 
@@ -298,6 +298,53 @@ func (h *EnabledModuleHandler) RotateAgentBootstrapToken(c *gin.Context) {
 		"token_hash":     result.TokenHash,
 		"cluster_policy": result.ClusterPolicy,
 	}, "agent bootstrap token rotated")
+}
+
+func (h *EnabledModuleHandler) AgentInstallBootstrapMetadata(c *gin.Context) {
+	if h == nil {
+		response.RespondServiceUnavailable(c, "module handler unavailable")
+		return
+	}
+	if h.AppPort <= 0 || h.AppPort > 65535 {
+		response.RespondInternalError(c, "invalid admin grpc port")
+		return
+	}
+
+	host := requestHostOnly(c.Request)
+	if host == "" {
+		response.RespondInternalError(c, "cannot resolve request host")
+		return
+	}
+
+	response.RespondSuccess(c, gin.H{
+		"admin_grpc_endpoint": "https://" + net.JoinHostPort(host, fmt.Sprintf("%d", h.AppPort)),
+		"admin_server_name":   host,
+		"admin_grpc_port":     h.AppPort,
+	}, "agent install bootstrap metadata")
+}
+
+func requestHostOnly(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	host := strings.TrimSpace(r.Host)
+	if host == "" {
+		return ""
+	}
+	if strings.HasPrefix(host, "[") {
+		if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+			return strings.Trim(strings.TrimSpace(parsedHost), "[]")
+		}
+	}
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		return strings.TrimSpace(parsedHost)
+	}
+	if strings.Count(host, ":") == 1 {
+		if idx := strings.LastIndex(host, ":"); idx > 0 {
+			return strings.TrimSpace(host[:idx])
+		}
+	}
+	return strings.Trim(strings.TrimSpace(host), "[]")
 }
 
 func (h *EnabledModuleHandler) ReinstallCert(c *gin.Context) {

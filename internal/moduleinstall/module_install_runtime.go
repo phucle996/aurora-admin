@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"math/big"
-	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -49,7 +48,6 @@ func buildInstallTarget(scope string, req ModuleInstallRequest) (moduleInstallTa
 	target := moduleInstallTarget{
 		Scope:          scope,
 		InstallRuntime: normalizeInstallRuntime(req.InstallRuntime),
-		Port:           22,
 	}
 
 	switch scope {
@@ -58,7 +56,6 @@ func buildInstallTarget(scope string, req ModuleInstallRequest) (moduleInstallTa
 		target.AgentGRPCEndpoint = normalizeAgentGRPCEndpoint(req.AgentGRPCEndpoint)
 		target.Kubeconfig = strings.TrimSpace(req.Kubeconfig)
 		target.KubeconfigPath = strings.TrimSpace(req.KubeconfigPath)
-		target.Username = strings.TrimSpace(req.TargetUser)
 		target.Host = normalizeAddress(req.TargetHost)
 		target.SudoPassword = normalizeOptionalSecret(req.SudoPassword)
 		if target.AgentGRPCEndpoint == "" {
@@ -69,17 +66,6 @@ func buildInstallTarget(scope string, req ModuleInstallRequest) (moduleInstallTa
 		}
 		if target.Host == "" {
 			target.Host = "agent-target"
-		}
-		target.Port = normalizePort(req.TargetPort)
-		if target.Username == "" {
-			target.Username = "aurora"
-		}
-		if target.Port <= 0 || target.Port > 65535 {
-			target.Port = 22
-		}
-		if target.InstallRuntime == ModuleInstallRuntimeK8s {
-			target.Port = 0
-			target.Username = ""
 		}
 		return target, nil
 	default:
@@ -104,13 +90,11 @@ func normalizeAgentGRPCEndpoint(raw string) string {
 
 func encodeEndpointValue(target moduleInstallTarget, endpoint string) string {
 	return fmt.Sprintf(
-		"%s(%s|%s|%s|%s|%d):%s",
+		"%s(%s|%s|%s):%s",
 		target.Scope,
 		target.AgentID,
 		target.AgentGRPCEndpoint,
-		target.Username,
 		target.Host,
-		target.Port,
 		strings.TrimSpace(endpoint),
 	)
 }
@@ -136,26 +120,16 @@ func parseEndpointTargetAndEndpoint(raw string) (moduleInstallTarget, string, bo
 		return out, "", false
 	}
 	parts := strings.Split(meta, "|")
-	if len(parts) >= 4 {
+	if len(parts) == 3 {
 		out.Scope = scope
 		out.AgentID = strings.TrimSpace(parts[0])
 		out.AgentGRPCEndpoint = normalizeAgentGRPCEndpoint(parts[1])
-		out.Username = strings.TrimSpace(parts[2])
-		out.Host = normalizeAddress(parts[3])
-		out.Port = 22
-		if len(parts) >= 5 {
-			if parsed, err := strconv.Atoi(strings.TrimSpace(parts[4])); err == nil && parsed > 0 && parsed <= 65535 {
-				out.Port = int32(parsed)
-			}
-		}
+		out.Host = normalizeAddress(parts[2])
 		if out.Host == "" {
 			out.Host = hostFromEndpoint(out.AgentGRPCEndpoint)
 		}
 		if out.Host == "" {
 			out.Host = "agent-target"
-		}
-		if out.Username == "" {
-			out.Username = "aurora"
 		}
 		if out.AgentGRPCEndpoint == "" {
 			return moduleInstallTarget{}, "", false
@@ -163,11 +137,25 @@ func parseEndpointTargetAndEndpoint(raw string) (moduleInstallTarget, string, bo
 		return out, strings.TrimSpace(endpoint), true
 	}
 
-	if len(parts) < 3 {
-		return out, "", false
+	// Backward compatibility for older endpoint metadata:
+	// remote(agent_id|grpc_endpoint|username|host|port):endpoint
+	if len(parts) >= 4 {
+		out.Scope = scope
+		out.AgentID = strings.TrimSpace(parts[0])
+		out.AgentGRPCEndpoint = normalizeAgentGRPCEndpoint(parts[1])
+		out.Host = normalizeAddress(parts[3])
+		if out.Host == "" {
+			out.Host = hostFromEndpoint(out.AgentGRPCEndpoint)
+		}
+		if out.Host == "" {
+			out.Host = "agent-target"
+		}
+		if out.AgentGRPCEndpoint == "" {
+			return moduleInstallTarget{}, "", false
+		}
+		return out, strings.TrimSpace(endpoint), true
 	}
 
-	// Old endpoint format does not contain agent endpoint, skip as unsupported.
 	return moduleInstallTarget{}, "", false
 }
 
@@ -187,13 +175,6 @@ func normalizeOptionalSecret(v *string) *string {
 		return nil
 	}
 	return &trimmed
-}
-
-func normalizePort(port int32) int32 {
-	if port <= 0 || port > 65535 {
-		return 22
-	}
-	return port
 }
 
 func normalizeAddress(raw string) string {
@@ -467,19 +448,6 @@ func buildDefaultModuleInstallCommand(
 	}, "\n")
 
 	return installScript
-}
-
-func detectLocalIPv4() string {
-	conn, err := net.Dial("udp", "8.8.8.8:80")
-	if err == nil {
-		defer conn.Close()
-		if udpAddress, ok := conn.LocalAddr().(*net.UDPAddr); ok && udpAddress.IP != nil {
-			if ipv4 := udpAddress.IP.To4(); ipv4 != nil {
-				return ipv4.String()
-			}
-		}
-	}
-	return "127.0.0.1"
 }
 
 func endpointHost(endpoint string) string {

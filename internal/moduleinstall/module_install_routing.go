@@ -94,7 +94,7 @@ func (s *ModuleInstallService) listConnectedAgentInstallTargets(
 	ctx context.Context,
 	skipAgentID string,
 ) ([]moduleInstallTarget, []string) {
-	agents, err := s.ListInstallAgents(ctx)
+	agents, err := s.listInstallAgentsRuntime(ctx)
 	if err != nil {
 		return nil, []string{fmt.Sprintf("list install agents failed: %v", err)}
 	}
@@ -121,8 +121,6 @@ func (s *ModuleInstallService) listConnectedAgentInstallTargets(
 			AgentID:           agentID,
 			AgentGRPCEndpoint: endpoint,
 			Host:              firstNonEmpty(item.Host, item.IPAddress, hostFromEndpoint(endpoint)),
-			Port:              22,
-			Username:          firstNonEmpty(item.Username, "aurora"),
 		})
 	}
 	return targets, warnings

@@ -9,7 +9,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -26,21 +25,11 @@ type ModuleInstallDialogProps = {
   installSubmitting: boolean;
   installTarget: ModuleStatusCard | null;
   appHost: string;
-  appPort: string;
-  installRuntime: "linux" | "k8s";
-  installCommand: string;
-  kubeconfig: string;
-  kubeconfigPath: string;
   selectedAgentID: string;
   installAgents: ModuleInstallAgent[];
   installAgentsLoading: boolean;
   onOpenChange: (open: boolean) => void;
   onAppHostChange: (value: string) => void;
-  onAppPortChange: (value: string) => void;
-  onInstallRuntimeChange: (value: "linux" | "k8s") => void;
-  onInstallCommandChange: (value: string) => void;
-  onKubeconfigChange: (value: string) => void;
-  onKubeconfigPathChange: (value: string) => void;
   onSelectedAgentIDChange: (value: string) => void;
   onInstall: () => void;
 };
@@ -50,29 +39,21 @@ export function ModuleInstallDialog({
   installSubmitting,
   installTarget,
   appHost,
-  appPort,
-  installRuntime,
-  installCommand,
-  kubeconfig,
-  kubeconfigPath,
   selectedAgentID,
   installAgents,
   installAgentsLoading,
   onOpenChange,
   onAppHostChange,
-  onAppPortChange,
-  onInstallRuntimeChange,
-  onInstallCommandChange,
-  onKubeconfigChange,
-  onKubeconfigPathChange,
   onSelectedAgentIDChange,
   onInstall,
 }: ModuleInstallDialogProps) {
   const selectedAgent = installAgents.find((item) => item.agent_id === selectedAgentID) ?? null;
+  const selectedAgentStatus = (selectedAgent?.status || "").toLowerCase();
+  const selectedAgentConnected = selectedAgentStatus === "connected";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Install Module</DialogTitle>
           <DialogDescription>
@@ -84,82 +65,17 @@ export function ModuleInstallDialog({
 
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="module-install-runtime">Install Runtime</Label>
-            <Select
-              value={installRuntime}
-              onValueChange={(value) => onInstallRuntimeChange(value === "k8s" ? "k8s" : "linux")}
-              disabled={installSubmitting}
-            >
-              <SelectTrigger id="module-install-runtime">
-                <SelectValue placeholder="Chon runtime" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="linux">Linux/Systemd</SelectItem>
-                <SelectItem value="k8s">Kubernetes (kubectl/helm)</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <div className="space-y-2">
-              <Label htmlFor="module-app-host">App Host</Label>
-              <Input
-                id="module-app-host"
-                value={appHost}
-                onChange={(event) => onAppHostChange(event.target.value)}
-                placeholder="vm.aurora.local"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="module-app-port">App Port (optional)</Label>
-              <Input
-                id="module-app-port"
-                value={appPort}
-                onChange={(event) => onAppPortChange(event.target.value)}
-                placeholder="De trong de random"
-                inputMode="numeric"
-              />
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="module-install-command">
-              Install Command {installRuntime === "k8s" ? "(required)" : "(optional)"}
-            </Label>
-            <Textarea
-              id="module-install-command"
-              value={installCommand}
-              onChange={(event) => onInstallCommandChange(event.target.value)}
-              placeholder={installRuntime === "k8s"
-                ? "kubectl apply -f k8s.yaml && helm upgrade --install ..."
-                : "De trong de dung default install command"}
-              rows={3}
+            <Label htmlFor="module-app-host">App Host</Label>
+            <Input
+              id="module-app-host"
+              value={appHost}
+              onChange={(event) => onAppHostChange(event.target.value)}
+              placeholder="ums.aurora.local"
             />
+            <p className="text-xs text-muted-foreground">
+              App port duoc cap phat tu dong tren target host.
+            </p>
           </div>
-
-          {installRuntime === "k8s" ? (
-            <div className="grid grid-cols-1 gap-2">
-              <div className="space-y-2">
-                <Label htmlFor="module-kubeconfig-path">Kubeconfig Path (optional)</Label>
-                <Input
-                  id="module-kubeconfig-path"
-                  value={kubeconfigPath}
-                  onChange={(event) => onKubeconfigPathChange(event.target.value)}
-                  placeholder="/etc/kubernetes/admin.conf"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="module-kubeconfig-inline">Kubeconfig Inline (optional)</Label>
-                <Textarea
-                  id="module-kubeconfig-inline"
-                  value={kubeconfig}
-                  onChange={(event) => onKubeconfigChange(event.target.value)}
-                  placeholder="apiVersion: v1 ..."
-                  rows={6}
-                />
-              </div>
-            </div>
-          ) : null}
 
           <div className="space-y-2">
             <Label htmlFor="module-agent-id">Target Agent</Label>
@@ -168,7 +84,7 @@ export function ModuleInstallDialog({
               onValueChange={onSelectedAgentIDChange}
               disabled={installSubmitting || installAgentsLoading}
             >
-              <SelectTrigger id="module-agent-id">
+              <SelectTrigger id="module-agent-id" className="w-full">
                 <SelectValue
                   placeholder={
                     installAgentsLoading
@@ -180,8 +96,7 @@ export function ModuleInstallDialog({
               <SelectContent>
                 {installAgents.map((item) => (
                   <SelectItem key={item.agent_id} value={item.agent_id}>
-                    {item.agent_id} | {item.hostname || item.host || "-"} |{" "}
-                    {item.status || "-"}
+                    {item.hostname || item.agent_id} | {item.agent_grpc_endpoint || "-"}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -190,10 +105,15 @@ export function ModuleInstallDialog({
 
           {selectedAgent ? (
             <div className="space-y-1 rounded-md border px-3 py-2 text-xs text-muted-foreground">
-              <p>host: {selectedAgent.host || selectedAgent.ip_address || "-"}</p>
-              <p>user: {selectedAgent.username || "aurora"}</p>
-              <p>port: {selectedAgent.port || 22}</p>
-              <p>status: {selectedAgent.status || "-"}</p>
+              <p className="inline-flex items-center gap-2">
+                <span
+                  className={selectedAgentConnected ? "h-2.5 w-2.5 rounded-full bg-emerald-500" : "h-2.5 w-2.5 rounded-full bg-rose-500"}
+                />
+                <span>status: {selectedAgent.status || "unknown"}</span>
+              </p>
+              <p>id: {selectedAgent.agent_id || "-"}</p>
+              <p>hostname: {selectedAgent.hostname || "-"}</p>
+              <p>grpc: {selectedAgent.agent_grpc_endpoint || "-"}</p>
             </div>
           ) : null}
         </div>
