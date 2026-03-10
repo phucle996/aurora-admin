@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -26,12 +27,20 @@ type ModuleInstallDialogProps = {
   installTarget: ModuleStatusCard | null;
   appHost: string;
   appPort: string;
+  installRuntime: "linux" | "k8s";
+  installCommand: string;
+  kubeconfig: string;
+  kubeconfigPath: string;
   selectedAgentID: string;
   installAgents: ModuleInstallAgent[];
   installAgentsLoading: boolean;
   onOpenChange: (open: boolean) => void;
   onAppHostChange: (value: string) => void;
   onAppPortChange: (value: string) => void;
+  onInstallRuntimeChange: (value: "linux" | "k8s") => void;
+  onInstallCommandChange: (value: string) => void;
+  onKubeconfigChange: (value: string) => void;
+  onKubeconfigPathChange: (value: string) => void;
   onSelectedAgentIDChange: (value: string) => void;
   onInstall: () => void;
 };
@@ -42,12 +51,20 @@ export function ModuleInstallDialog({
   installTarget,
   appHost,
   appPort,
+  installRuntime,
+  installCommand,
+  kubeconfig,
+  kubeconfigPath,
   selectedAgentID,
   installAgents,
   installAgentsLoading,
   onOpenChange,
   onAppHostChange,
   onAppPortChange,
+  onInstallRuntimeChange,
+  onInstallCommandChange,
+  onKubeconfigChange,
+  onKubeconfigPathChange,
   onSelectedAgentIDChange,
   onInstall,
 }: ModuleInstallDialogProps) {
@@ -66,6 +83,23 @@ export function ModuleInstallDialog({
         </DialogHeader>
 
         <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="module-install-runtime">Install Runtime</Label>
+            <Select
+              value={installRuntime}
+              onValueChange={(value) => onInstallRuntimeChange(value === "k8s" ? "k8s" : "linux")}
+              disabled={installSubmitting}
+            >
+              <SelectTrigger id="module-install-runtime">
+                <SelectValue placeholder="Chon runtime" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="linux">Linux/Systemd</SelectItem>
+                <SelectItem value="k8s">Kubernetes (kubectl/helm)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-2">
               <Label htmlFor="module-app-host">App Host</Label>
@@ -87,6 +121,45 @@ export function ModuleInstallDialog({
               />
             </div>
           </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="module-install-command">
+              Install Command {installRuntime === "k8s" ? "(required)" : "(optional)"}
+            </Label>
+            <Textarea
+              id="module-install-command"
+              value={installCommand}
+              onChange={(event) => onInstallCommandChange(event.target.value)}
+              placeholder={installRuntime === "k8s"
+                ? "kubectl apply -f k8s.yaml && helm upgrade --install ..."
+                : "De trong de dung default install command"}
+              rows={3}
+            />
+          </div>
+
+          {installRuntime === "k8s" ? (
+            <div className="grid grid-cols-1 gap-2">
+              <div className="space-y-2">
+                <Label htmlFor="module-kubeconfig-path">Kubeconfig Path (optional)</Label>
+                <Input
+                  id="module-kubeconfig-path"
+                  value={kubeconfigPath}
+                  onChange={(event) => onKubeconfigPathChange(event.target.value)}
+                  placeholder="/etc/kubernetes/admin.conf"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="module-kubeconfig-inline">Kubeconfig Inline (optional)</Label>
+                <Textarea
+                  id="module-kubeconfig-inline"
+                  value={kubeconfig}
+                  onChange={(event) => onKubeconfigChange(event.target.value)}
+                  placeholder="apiVersion: v1 ..."
+                  rows={6}
+                />
+              </div>
+            </div>
+          ) : null}
 
           <div className="space-y-2">
             <Label htmlFor="module-agent-id">Target Agent</Label>

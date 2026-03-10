@@ -13,7 +13,9 @@ import (
 )
 
 const (
-	ModuleInstallScopeRemote = "remote"
+	ModuleInstallScopeRemote  = "remote"
+	ModuleInstallRuntimeLinux = "linux"
+	ModuleInstallRuntimeK8s   = "k8s"
 
 	schemaDigitsCount = 10
 )
@@ -21,12 +23,15 @@ const (
 type ModuleInstallRequest struct {
 	ModuleName        string
 	Scope             string
+	InstallRuntime    string
 	AgentID           string
 	AgentGRPCEndpoint string
 	AppHost           string
 	AppPort           int32
 	Endpoint          string
 	InstallCommand    string
+	Kubeconfig        string
+	KubeconfigPath    string
 	TargetHost        string
 	TargetPort        int32
 	TargetUser        string
@@ -52,8 +57,11 @@ type ModuleInstallResult struct {
 
 type moduleInstallTarget struct {
 	Scope             string
+	InstallRuntime    string
 	AgentID           string
 	AgentGRPCEndpoint string
+	Kubeconfig        string
+	KubeconfigPath    string
 	Username          string
 	Host              string
 	Port              int32
@@ -135,6 +143,8 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 	if scope != ModuleInstallScopeRemote {
 		return nil, errorvar.ErrModuleInstallScope
 	}
+	installRuntime := normalizeInstallRuntime(req.InstallRuntime)
+	isK8sRuntime := installRuntime == ModuleInstallRuntimeK8s
 
 	appHost := strings.TrimSpace(req.AppHost)
 	if appHost == "" {
@@ -152,22 +162,26 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 	if err != nil {
 		return nil, err
 	}
-	logInstall(logFn, "install", "start module=%s scope=%s app_host=%s app_port=%d endpoint=%s", moduleName, scope, appHost, endpointPort, endpoint)
+	logInstall(logFn, "install", "start module=%s scope=%s runtime=%s app_host=%s app_port=%d endpoint=%s", moduleName, scope, installRuntime, appHost, endpointPort, endpoint)
 	logInstall(logFn, "target", "target host=%s port=%d user=%s", target.Host, target.Port, target.Username)
-	if preflightErr := ensureTargetInstallPrivilege(ctx, target, logFn); preflightErr != nil {
-		logInstall(logFn, "preflight", "[error] %v", preflightErr)
-		return nil, preflightErr
-	}
-	resolvedPort, portErr := resolveInstallPortForTarget(ctx, target, endpointPort, req.AppPort > 0)
-	if portErr != nil {
-		logInstall(logFn, "install", "[error] %v", portErr)
-		return nil, portErr
-	}
-	if resolvedPort != endpointPort {
-		logInstall(logFn, "install", "auto-selected available app_port=%d (previous=%d busy)", resolvedPort, endpointPort)
-		endpointPort = resolvedPort
+	if !isK8sRuntime {
+		if preflightErr := ensureTargetInstallPrivilege(ctx, target, logFn); preflightErr != nil {
+			logInstall(logFn, "preflight", "[error] %v", preflightErr)
+			return nil, preflightErr
+		}
+		resolvedPort, portErr := resolveInstallPortForTarget(ctx, target, endpointPort, req.AppPort > 0)
+		if portErr != nil {
+			logInstall(logFn, "install", "[error] %v", portErr)
+			return nil, portErr
+		}
+		if resolvedPort != endpointPort {
+			logInstall(logFn, "install", "auto-selected available app_port=%d (previous=%d busy)", resolvedPort, endpointPort)
+			endpointPort = resolvedPort
+		} else {
+			logInstall(logFn, "install", "confirmed app_port=%d is available on target", endpointPort)
+		}
 	} else {
-		logInstall(logFn, "install", "confirmed app_port=%d is available on target", endpointPort)
+		logInstall(logFn, "install", "k8s runtime detected: skip host port preflight")
 	}
 
 	result = &ModuleInstallResult{
@@ -212,6 +226,9 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 		command = strings.TrimSpace(req.InstallCommand)
 		logInstall(logFn, "install", "using custom install command for remote target")
 	} else {
+		if isK8sRuntime {
+			return nil, fmt.Errorf("install_command is required for k8s runtime")
+		}
 		uiEnvPath := ""
 		if moduleName == "ui" {
 			envRemotePath, envErr := s.generateAndPushUIEnv(ctx, target, endpoints.items, endpoints.err, logFn)
@@ -233,10 +250,16 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 		return nil, preseedErr
 	}
 
-	tlsBundle, tlsErr := installModuleTLSOnTarget(ctx, target, moduleName, appHost, endpoint, logFn)
-	if tlsErr != nil {
-		logInstall(logFn, "tls", "[error] %v", tlsErr)
-		return nil, fmt.Errorf("install tls materials failed: %w", tlsErr)
+	var tlsBundle *moduleTLSBundle
+	if !isK8sRuntime {
+		tlsLocalBundle, tlsErr := installModuleTLSOnTarget(ctx, target, moduleName, appHost, endpoint, logFn)
+		if tlsErr != nil {
+			logInstall(logFn, "tls", "[error] %v", tlsErr)
+			return nil, fmt.Errorf("install tls materials failed: %w", tlsErr)
+		}
+		tlsBundle = tlsLocalBundle
+	} else {
+		logInstall(logFn, "tls", "k8s runtime detected: skip target tls material install")
 	}
 
 	logInstall(logFn, "install", "running install command")
@@ -263,100 +286,105 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 	}
 	logInstall(logFn, "install", "install command completed exit_code=%d", exitCode)
 
-	tlsPresent, tlsCheckOutput, tlsCheckErr := moduleTLSExistsOnTarget(ctx, target, moduleName)
-	if tlsCheckErr != nil {
-		logInstall(logFn, "tls", "[warn] cannot verify tls materials on target: %v", tlsCheckErr)
-	} else if !tlsPresent {
-		logInstall(logFn, "tls", "[warn] tls materials missing after install, reinstalling: %s", strings.TrimSpace(tlsCheckOutput))
-		repairedBundle, repairErr := installModuleTLSOnTarget(ctx, target, moduleName, appHost, endpoint, logFn)
-		if repairErr != nil {
-			logInstall(logFn, "tls", "[error] tls self-heal failed: %v", repairErr)
-			return nil, fmt.Errorf("tls materials missing after install: %w", repairErr)
+	if !isK8sRuntime {
+		tlsPresent, tlsCheckOutput, tlsCheckErr := moduleTLSExistsOnTarget(ctx, target, moduleName)
+		if tlsCheckErr != nil {
+			logInstall(logFn, "tls", "[warn] cannot verify tls materials on target: %v", tlsCheckErr)
+		} else if !tlsPresent {
+			logInstall(logFn, "tls", "[warn] tls materials missing after install, reinstalling: %s", strings.TrimSpace(tlsCheckOutput))
+			repairedBundle, repairErr := installModuleTLSOnTarget(ctx, target, moduleName, appHost, endpoint, logFn)
+			if repairErr != nil {
+				logInstall(logFn, "tls", "[error] tls self-heal failed: %v", repairErr)
+				return nil, fmt.Errorf("tls materials missing after install: %w", repairErr)
+			}
+			tlsBundle = repairedBundle
+			logInstall(logFn, "tls", "tls self-heal completed")
 		}
-		tlsBundle = repairedBundle
-		logInstall(logFn, "tls", "tls self-heal completed")
-	}
 
-	targetAddr := normalizeAddress(target.Host)
-	if targetAddr == "" {
-		targetAddr = "127.0.0.1"
-	}
-	hostEntryHost := strings.TrimSpace(appHost)
-	if hostEntryHost == "" {
-		return nil, fmt.Errorf("app_host is required")
-	}
-	hostEntries := []hostsEntry{
-		{
-			Address: targetAddr,
-			Host:    hostEntryHost,
-		},
-	}
-	logInstall(logFn, "hosts", "sync app host /etc/hosts on target (required) host=%s address=%s target=%s", hostEntryHost, targetAddr, target.Host)
+		targetAddr := normalizeAddress(target.Host)
+		if targetAddr == "" {
+			targetAddr = "127.0.0.1"
+		}
+		hostEntryHost := strings.TrimSpace(appHost)
+		if hostEntryHost == "" {
+			return nil, fmt.Errorf("app_host is required")
+		}
+		hostEntries := []hostsEntry{
+			{
+				Address: targetAddr,
+				Host:    hostEntryHost,
+			},
+		}
+		logInstall(logFn, "hosts", "sync app host /etc/hosts on target (required) host=%s address=%s target=%s", hostEntryHost, targetAddr, target.Host)
 
-	hostsUpdated, hostWarnings := syncHostsForTargets(ctx, hostEntries, []moduleInstallTarget{target})
-	result.HostsUpdated = hostsUpdated
-	result.Warnings = append(result.Warnings, hostWarnings...)
-	if len(hostsUpdated) == 0 {
+		hostsUpdated, hostWarnings := syncHostsForTargets(ctx, hostEntries, []moduleInstallTarget{target})
+		result.HostsUpdated = hostsUpdated
+		result.Warnings = append(result.Warnings, hostWarnings...)
+		if len(hostsUpdated) == 0 {
+			for _, warning := range hostWarnings {
+				logInstall(logFn, "hosts", "[error] %s", warning)
+			}
+			if len(hostWarnings) == 0 {
+				logInstall(logFn, "hosts", "[error] no host entries were updated on target")
+			}
+			return nil, fmt.Errorf("sync app host to /etc/hosts failed")
+		}
+		logInstall(logFn, "hosts", "app host synced targets=%s", strings.Join(hostsUpdated, ","))
 		for _, warning := range hostWarnings {
-			logInstall(logFn, "hosts", "[error] %s", warning)
-		}
-		if len(hostWarnings) == 0 {
-			logInstall(logFn, "hosts", "[error] no host entries were updated on target")
-		}
-		return nil, fmt.Errorf("sync app host to /etc/hosts failed")
-	}
-	logInstall(logFn, "hosts", "app host synced targets=%s", strings.Join(hostsUpdated, ","))
-	for _, warning := range hostWarnings {
-		logInstall(logFn, "hosts", "[warn] %s", warning)
-	}
-
-	if err := s.seedHostRoutingEntry(ctx, hostEntryHost, targetAddr); err != nil {
-		logInstall(logFn, "hosts", "[error] %v", err)
-		return nil, fmt.Errorf("seed host routing failed: %w", err)
-	}
-	hostRoutingKey := keycfg.RuntimeHostEntryKey(hostEntryHost)
-	logInstall(logFn, "hosts", "seeded host routing key=%s", hostRoutingKey)
-	rollbacks.Add("hosts", func(rollbackCtx context.Context) error {
-		deleteScript := buildHostsDeleteCommand(hostEntryHost, target.SudoPassword)
-		runCtx, cancel := context.WithTimeout(rollbackCtx, 20*time.Second)
-		_, _, runErr := runCommandOnTarget(runCtx, target, deleteScript, 20*time.Second, nil, nil)
-		cancel()
-		if runErr != nil {
-			return fmt.Errorf("rollback hosts file cleanup failed: %w", runErr)
+			logInstall(logFn, "hosts", "[warn] %s", warning)
 		}
 
-		if s.runtimeRepo == nil {
+		if err := s.seedHostRoutingEntry(ctx, hostEntryHost, targetAddr); err != nil {
+			logInstall(logFn, "hosts", "[error] %v", err)
+			return nil, fmt.Errorf("seed host routing failed: %w", err)
+		}
+		hostRoutingKey := keycfg.RuntimeHostEntryKey(hostEntryHost)
+		logInstall(logFn, "hosts", "seeded host routing key=%s", hostRoutingKey)
+		rollbacks.Add("hosts", func(rollbackCtx context.Context) error {
+			deleteScript := buildHostsDeleteCommand(hostEntryHost, target.SudoPassword)
+			runCtx, cancel := context.WithTimeout(rollbackCtx, 20*time.Second)
+			_, _, runErr := runCommandOnTarget(runCtx, target, deleteScript, 20*time.Second, nil, nil)
+			cancel()
+			if runErr != nil {
+				return fmt.Errorf("rollback hosts file cleanup failed: %w", runErr)
+			}
+
+			if s.runtimeRepo == nil {
+				return nil
+			}
+			deleteCtx, deleteCancel := context.WithTimeout(rollbackCtx, 10*time.Second)
+			deleteErr := s.runtimeRepo.Delete(deleteCtx, hostRoutingKey)
+			deleteCancel()
+			if deleteErr != nil {
+				return fmt.Errorf("rollback runtime host key cleanup failed: %w", deleteErr)
+			}
 			return nil
+		})
+
+		agentBroadcastUpdated, agentBroadcastWarnings := s.broadcastHostsToConnectedAgents(ctx, hostEntries, target.AgentID)
+		for _, item := range agentBroadcastUpdated {
+			result.HostsUpdated = append(result.HostsUpdated, "agent:"+item)
 		}
-		deleteCtx, deleteCancel := context.WithTimeout(rollbackCtx, 10*time.Second)
-		deleteErr := s.runtimeRepo.Delete(deleteCtx, hostRoutingKey)
-		deleteCancel()
-		if deleteErr != nil {
-			return fmt.Errorf("rollback runtime host key cleanup failed: %w", deleteErr)
+		for _, warning := range agentBroadcastWarnings {
+			result.Warnings = append(result.Warnings, warning)
+			logInstall(logFn, "hosts", "[warn] %s", warning)
 		}
-		return nil
-	})
 
-	agentBroadcastUpdated, agentBroadcastWarnings := s.broadcastHostsToConnectedAgents(ctx, hostEntries, target.AgentID)
-	for _, item := range agentBroadcastUpdated {
-		result.HostsUpdated = append(result.HostsUpdated, "agent:"+item)
-	}
-	for _, warning := range agentBroadcastWarnings {
-		result.Warnings = append(result.Warnings, warning)
-		logInstall(logFn, "hosts", "[warn] %s", warning)
-	}
+		if nginxErr := ensureModuleNginxProxyOnTarget(ctx, target, moduleName, appHost, endpointPort, logFn); nginxErr != nil {
+			logInstall(logFn, "nginx", "[error] %v", nginxErr)
+			return nil, fmt.Errorf("configure nginx proxy failed: %w", nginxErr)
+		}
 
-	if nginxErr := ensureModuleNginxProxyOnTarget(ctx, target, moduleName, appHost, endpointPort, logFn); nginxErr != nil {
-		logInstall(logFn, "nginx", "[error] %v", nginxErr)
-		return nil, fmt.Errorf("configure nginx proxy failed: %w", nginxErr)
+		if seedErr := s.seedModuleTLSBundle(ctx, moduleName, tlsBundle); seedErr != nil {
+			logInstall(logFn, "tls", "[error] %v", seedErr)
+			return nil, fmt.Errorf("seed module tls bundle failed: %w", seedErr)
+		}
+		s.addModuleTLSRollbackStep(rollbacks, moduleName)
+		logInstall(logFn, "tls", "seeded module tls bundle into cert store")
+	} else {
+		result.Warnings = append(result.Warnings, "k8s runtime mode: skipped target tls/hosts/nginx/cert-store steps")
+		logInstall(logFn, "install", "k8s runtime mode: skipped target tls/hosts/nginx/cert-store steps")
 	}
-
-	if seedErr := s.seedModuleTLSBundle(ctx, moduleName, tlsBundle); seedErr != nil {
-		logInstall(logFn, "tls", "[error] %v", seedErr)
-		return nil, fmt.Errorf("seed module tls bundle failed: %w", seedErr)
-	}
-	s.addModuleTLSRollbackStep(rollbacks, moduleName)
-	logInstall(logFn, "tls", "seeded module tls bundle into cert store")
 
 	logInstall(logFn, "install", "[done] module install completed module=%s", moduleName)
 	rollbacks.Clear()

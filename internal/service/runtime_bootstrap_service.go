@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
@@ -65,6 +66,12 @@ type AgentBootstrapResult struct {
 	CACertPEM     string
 	SerialHex     string
 	ExpiresAt     time.Time
+}
+
+type AgentBootstrapTokenResult struct {
+	Token         string
+	TokenHash     string
+	ClusterPolicy string
 }
 
 var (
@@ -689,6 +696,49 @@ func (s *RuntimeBootstrapService) verifyAgentBootstrapToken(ctx context.Context,
 		return "", ErrAgentBootstrapTokenInvalid
 	}
 	return strings.TrimSpace(value), nil
+}
+
+func (s *RuntimeBootstrapService) RotateAgentBootstrapToken(ctx context.Context) (*AgentBootstrapTokenResult, error) {
+	if s == nil || s.runtimeRepo == nil {
+		return nil, fmt.Errorf("runtime bootstrap service is nil")
+	}
+
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return nil, fmt.Errorf("generate bootstrap token failed: %w", err)
+	}
+
+	encoded := strings.TrimSpace(base64.StdEncoding.EncodeToString(raw))
+	if encoded == "" {
+		return nil, fmt.Errorf("generate bootstrap token failed: empty token")
+	}
+
+	existing, err := s.runtimeRepo.ListByPrefix(ctx, keycfg.RuntimeAgentBootstrapTokenPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("list bootstrap tokens failed: %w", err)
+	}
+	for _, item := range existing {
+		if deleteErr := s.runtimeRepo.Delete(ctx, item.Key); deleteErr != nil {
+			return nil, fmt.Errorf("delete old bootstrap token failed (%s): %w", item.Key, deleteErr)
+		}
+	}
+
+	sum := sha256.Sum256([]byte(encoded))
+	hash := hex.EncodeToString(sum[:])
+	clusterPolicy := "*"
+
+	if err := s.runtimeRepo.Upsert(ctx, keycfg.RuntimeAgentBootstrapTokenKey(hash), clusterPolicy); err != nil {
+		return nil, fmt.Errorf("store bootstrap token hash failed: %w", err)
+	}
+	if err := s.runtimeRepo.Upsert(ctx, keycfg.RuntimeAgentBootstrapTokenActive, encoded); err != nil {
+		return nil, fmt.Errorf("store active bootstrap token failed: %w", err)
+	}
+
+	return &AgentBootstrapTokenResult{
+		Token:         encoded,
+		TokenHash:     hash,
+		ClusterPolicy: clusterPolicy,
+	}, nil
 }
 
 func parseAndVerifyCSR(rawCSR string) (*x509.CertificateRequest, error) {

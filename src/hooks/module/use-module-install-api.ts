@@ -5,11 +5,14 @@ export type ModuleInstallScope = "remote";
 export type ModuleInstallPayload = {
   module_name: string;
   scope: ModuleInstallScope;
+  install_runtime?: "linux" | "k8s";
   agent_id?: string;
   app_host: string;
   app_port?: number;
   endpoint?: string;
   install_command?: string;
+  kubeconfig?: string;
+  kubeconfig_path?: string;
   sudo_password?: string;
 };
 
@@ -23,6 +26,12 @@ export type ModuleInstallAgent = {
   host: string;
   port: number;
   username: string;
+};
+
+export type AgentBootstrapTokenResponse = {
+  token: string;
+  token_hash: string;
+  cluster_policy: string;
 };
 
 export type ModuleInstallResult = {
@@ -134,6 +143,40 @@ export async function listModuleInstallAgents(): Promise<ModuleInstallAgent[]> {
   const body = (parsed?.data ?? {}) as Record<string, unknown>;
   const rows = Array.isArray(body.items) ? body.items : [];
   return rows.map((item) => parseModuleInstallAgent(item));
+}
+
+export async function rotateAgentBootstrapToken(): Promise<AgentBootstrapTokenResponse> {
+  const baseURL = resolveAdminBaseURL();
+  const path = "/api/v1/modules/install/agent-bootstrap-token";
+  const url = baseURL ? new URL(path, baseURL).toString() : path;
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+    },
+    credentials: "include",
+  });
+
+  const text = await res.text();
+  let parsed: ModuleInstallApiResponse | null = null;
+  try {
+    parsed = JSON.parse(text) as ModuleInstallApiResponse;
+  } catch {
+    parsed = null;
+  }
+
+  if (!res.ok) {
+    const detail = toStringValue(parsed?.message ?? parsed?.error) || toSingleLine(text);
+    throw new Error(`Rotate bootstrap token failed (HTTP ${res.status} ${res.statusText}): ${detail || "empty response"}`);
+  }
+
+  const body = (parsed?.data ?? {}) as Record<string, unknown>;
+  return {
+    token: toStringValue(body.token),
+    token_hash: toStringValue(body.token_hash),
+    cluster_policy: toStringValue(body.cluster_policy),
+  };
 }
 
 function parseModuleInstallResult(raw: unknown): ModuleInstallResult {

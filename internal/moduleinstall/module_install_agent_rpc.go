@@ -21,8 +21,12 @@ import (
 const agentRunCommandMethodPath = "/aurora.agent.v1.AgentService/RunCommand"
 
 type agentRunCommandRequest struct {
-	Command        string `json:"command"`
-	TimeoutSeconds int32  `json:"timeout_seconds,omitempty"`
+	Command        string            `json:"command"`
+	TimeoutSeconds int32             `json:"timeout_seconds,omitempty"`
+	InstallRuntime string            `json:"install_runtime,omitempty"`
+	Kubeconfig     string            `json:"kubeconfig,omitempty"`
+	KubeconfigPath string            `json:"kubeconfig_path,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
 }
 
 type agentRunCommandResponse struct {
@@ -122,6 +126,9 @@ func runCommandOnAgent(
 	req := &agentRunCommandRequest{
 		Command:        strings.TrimSpace(command),
 		TimeoutSeconds: callTimeoutSeconds,
+		InstallRuntime: normalizeInstallRuntime(target.InstallRuntime),
+		Kubeconfig:     strings.TrimSpace(target.Kubeconfig),
+		KubeconfigPath: strings.TrimSpace(target.KubeconfigPath),
 	}
 	res := &agentRunCommandResponse{}
 

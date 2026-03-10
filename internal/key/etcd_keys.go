@@ -22,6 +22,7 @@ const (
 	RuntimeHostsPrefix               = "/runtime/hosts"
 	RuntimeAgentPrefix               = "/runtime/agent/nodes"
 	RuntimeAgentBootstrapTokenPrefix = "/runtime/agent/bootstrap_tokens"
+	RuntimeAgentBootstrapTokenActive = "/runtime/agent/bootstrap_token_active_b64"
 	RuntimeAgentRevocationPrefix     = "/runtime/agent/revocations"
 
 	APIKeyCurrentVersionPath       = "/apikey/current_version"

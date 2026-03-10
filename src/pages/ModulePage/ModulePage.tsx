@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import {
   installModuleStream,
   listModuleInstallAgents,
+  rotateAgentBootstrapToken,
   reinstallModuleCertStream,
   type ModuleInstallAgent,
   type ModuleInstallResult,
@@ -33,6 +34,8 @@ export default function ModulePage() {
   const syncedOnMountRef = useRef(false);
 
   const [searchQuery, setSearchQuery] = useState("");
+  const [agentSearchQuery, setAgentSearchQuery] = useState("");
+  const [agentBootstrapToken, setAgentBootstrapToken] = useState("");
 
   const [installDialogOpen, setInstallDialogOpen] = useState(false);
   const [installSubmitting, setInstallSubmitting] = useState(false);
@@ -40,6 +43,10 @@ export default function ModulePage() {
     null,
   );
   const [installScope] = useState<ModuleInstallScope>("remote");
+  const [installRuntime, setInstallRuntime] = useState<"linux" | "k8s">("linux");
+  const [installCommand, setInstallCommand] = useState("");
+  const [kubeconfig, setKubeconfig] = useState("");
+  const [kubeconfigPath, setKubeconfigPath] = useState("");
   const [appHost, setAppHost] = useState("");
   const [appPort, setAppPort] = useState("");
   const [selectedAgentID, setSelectedAgentID] = useState("");
@@ -77,23 +84,102 @@ export default function ModulePage() {
     });
   }, [cards, searchQuery]);
 
+  const agentInstallScript = useMemo(() => {
+    const defaultEndpoint = "https://admin.aurora.local";
+    const tokenSegment = agentBootstrapToken.trim()
+      ? ` --bootstrap-token '${agentBootstrapToken.trim()}'`
+      : "";
+    if (typeof window === "undefined") {
+      return [
+        "curl -fsSL https://raw.githubusercontent.com/phucle996/aurora-agent/main/scripts/install.sh -o install.sh",
+        "chmod +x install.sh",
+        `sudo ./install.sh --admin-grpc-endpoint ${defaultEndpoint}${tokenSegment}`,
+      ].join("\n");
+    }
+
+    const host = window.location.hostname || "admin.aurora.local";
+    const endpoint = `https://${host}`;
+    return [
+      "curl -fsSL https://raw.githubusercontent.com/phucle996/aurora-agent/main/scripts/install.sh -o install.sh",
+      "chmod +x install.sh",
+      `sudo ./install.sh --admin-grpc-endpoint ${endpoint}${tokenSegment}`,
+    ].join("\n");
+  }, [agentBootstrapToken]);
+
+  const refreshInstallAgents = (silent = false) => {
+    setInstallAgentsLoading(true);
+    return listModuleInstallAgents()
+      .then((items) => {
+        setInstallAgents(items);
+        if (!selectedAgentID.trim()) {
+          const connected = items.find((agent) => agent.status === "connected");
+          setSelectedAgentID((connected ?? items[0])?.agent_id || "");
+          return;
+        }
+        const stillExists = items.some((agent) => agent.agent_id === selectedAgentID);
+        if (!stillExists) {
+          const connected = items.find((agent) => agent.status === "connected");
+          setSelectedAgentID((connected ?? items[0])?.agent_id || "");
+        }
+      })
+      .catch((err) => {
+        const message =
+          err instanceof Error && err.message.trim()
+            ? err.message
+            : "Khong the tai danh sach agent";
+        if (!silent) {
+          toast.error(message);
+        }
+      })
+      .finally(() => {
+        setInstallAgentsLoading(false);
+      });
+  };
+
   useEffect(() => {
     if (syncedOnMountRef.current) {
       return;
     }
     syncedOnMountRef.current = true;
-    void refreshModules({ force: true }).catch(() => {
-      toast.error("Khong the tai module status tu API");
+    void Promise.all([
+      refreshModules({ force: true }),
+      refreshInstallAgents(true),
+    ]).catch(() => {
+      toast.error("Khong the tai du lieu runtime");
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshModules]);
 
   const handleRefresh = () => {
-    void refreshModules({ force: true })
+    void Promise.all([
+      refreshModules({ force: true }),
+      refreshInstallAgents(true),
+    ])
       .then(() => {
-        toast.success("Da cap nhat module status tu API");
+        toast.success("Da cap nhat runtime + agent");
       })
       .catch(() => {
-        toast.error("Khong the cap nhat module status tu API");
+        toast.error("Khong the cap nhat du lieu runtime");
+      });
+  };
+
+  const handleRotateAgentBootstrapToken = () => {
+    return rotateAgentBootstrapToken()
+      .then((result) => {
+        const token = result.token.trim();
+        if (!token) {
+          throw new Error("bootstrap token response is empty");
+        }
+        setAgentBootstrapToken(token);
+        toast.success("Da tao bootstrap token moi");
+      })
+      .catch((err) => {
+        const message =
+          err instanceof Error && err.message.trim()
+            ? err.message
+            : "Khong the tao bootstrap token";
+        toast.error(message);
+        throw err;
       });
   };
 
@@ -104,29 +190,18 @@ export default function ModulePage() {
     setInstallTarget(item);
     setAppHost(defaultHost);
     setAppPort("");
-    setSelectedAgentID("");
-    setInstallAgents([]);
-    setInstallAgentsLoading(true);
+    setInstallRuntime("linux");
+    setInstallCommand("");
+    setKubeconfig("");
+    setKubeconfigPath("");
+    if (!selectedAgentID.trim() && installAgents.length > 0) {
+      const connected = installAgents.find((agent) => agent.status === "connected");
+      setSelectedAgentID((connected ?? installAgents[0]).agent_id);
+    }
     setInstallDialogOpen(true);
-
-    void listModuleInstallAgents()
-      .then((items) => {
-        setInstallAgents(items);
-        if (items.length > 0) {
-          const connected = items.find((agent) => agent.status === "connected");
-          setSelectedAgentID((connected ?? items[0]).agent_id);
-        }
-      })
-      .catch((err) => {
-        const message =
-          err instanceof Error && err.message.trim()
-            ? err.message
-            : "Khong the tai danh sach agent";
-        toast.error(message);
-      })
-      .finally(() => {
-        setInstallAgentsLoading(false);
-      });
+    if (installAgents.length === 0 && !installAgentsLoading) {
+      void refreshInstallAgents(false);
+    }
   };
 
   const appendInstallLog = (line: string) => {
@@ -162,6 +237,17 @@ export default function ModulePage() {
       toast.error("Hay chon agent de install");
       return;
     }
+    const normalizedInstallCommand = installCommand.trim();
+    const normalizedKubeconfig = kubeconfig.trim();
+    const normalizedKubeconfigPath = kubeconfigPath.trim();
+    if (installRuntime === "k8s" && !normalizedInstallCommand) {
+      toast.error("K8s runtime yeu cau install command");
+      return;
+    }
+    if (installRuntime === "k8s" && !normalizedKubeconfig && !normalizedKubeconfigPath) {
+      toast.error("K8s runtime yeu cau kubeconfig inline hoac kubeconfig path");
+      return;
+    }
 
     setInstallSubmitting(true);
     setInstallDialogOpen(false);
@@ -178,11 +264,15 @@ export default function ModulePage() {
         {
           module_name: moduleName,
           scope: installScope,
+          install_runtime: installRuntime,
           agent_id: selectedAgentID.trim(),
           app_host: normalizedAppHost,
           app_port: normalizedAppPort
             ? Number.parseInt(normalizedAppPort, 10)
             : undefined,
+          install_command: normalizedInstallCommand || undefined,
+          kubeconfig: normalizedKubeconfig || undefined,
+          kubeconfig_path: normalizedKubeconfigPath || undefined,
         },
         {
           onLog: (stage, message) => {
@@ -200,7 +290,10 @@ export default function ModulePage() {
       } else {
         toast.success(`Install ${installTarget.label} thanh cong`);
       }
-      await refreshModules({ force: true });
+      await Promise.all([
+        refreshModules({ force: true }),
+        refreshInstallAgents(true),
+      ]);
     } catch (err) {
       const message =
         err instanceof Error && err.message.trim()
@@ -257,7 +350,10 @@ export default function ModulePage() {
         toast.success(`Reinstall cert ${item.label} thanh cong`);
       }
 
-      await refreshModules({ force: true });
+      await Promise.all([
+        refreshModules({ force: true }),
+        refreshInstallAgents(true),
+      ]);
     } catch (err) {
       const message =
         err instanceof Error && err.message.trim()
@@ -281,9 +377,21 @@ export default function ModulePage() {
         error={error}
         lastFetchedAt={lastFetchedAt}
         searchQuery={searchQuery}
+        agentSearchQuery={agentSearchQuery}
         filteredCards={filteredCards}
+        installAgents={installAgents}
+        installAgentsLoading={installAgentsLoading}
+        agentInstallScript={agentInstallScript}
+        agentBootstrapToken={agentBootstrapToken}
         onSearchQueryChange={setSearchQuery}
+        onAgentSearchQueryChange={setAgentSearchQuery}
         onRefresh={handleRefresh}
+        onRefreshAgents={() => {
+          void refreshInstallAgents(false);
+        }}
+        onRotateAgentBootstrapToken={() => {
+          void handleRotateAgentBootstrapToken();
+        }}
         onInstall={openInstallDialog}
         onReinstallCert={handleReinstallCert}
         actionRunning={installRunning || installSubmitting}
@@ -295,12 +403,20 @@ export default function ModulePage() {
         installTarget={installTarget}
         appHost={appHost}
         appPort={appPort}
+        installRuntime={installRuntime}
+        installCommand={installCommand}
+        kubeconfig={kubeconfig}
+        kubeconfigPath={kubeconfigPath}
         selectedAgentID={selectedAgentID}
         installAgents={installAgents}
         installAgentsLoading={installAgentsLoading}
         onOpenChange={setInstallDialogOpen}
         onAppHostChange={setAppHost}
         onAppPortChange={setAppPort}
+        onInstallRuntimeChange={setInstallRuntime}
+        onInstallCommandChange={setInstallCommand}
+        onKubeconfigChange={setKubeconfig}
+        onKubeconfigPathChange={setKubeconfigPath}
         onSelectedAgentIDChange={setSelectedAgentID}
         onInstall={handleInstall}
       />

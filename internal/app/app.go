@@ -49,7 +49,11 @@ func NewApplication(cfg *config.Config) (*App, error) {
 	}
 	health := handler.NewHealthHandler(modules.Etcd)
 	apiKeyHandler := handler.NewAPIKeyHandler(modules.APIKeySvc)
-	enabledModuleHandler := handler.NewEnabledModuleHandler(modules.EnabledModuleSvc, modules.ModuleInstallSvc)
+	enabledModuleHandler := handler.NewEnabledModuleHandler(
+		modules.EnabledModuleSvc,
+		modules.ModuleInstallSvc,
+		modules.RuntimeSvc,
+	)
 	// --------------------
 	// gin http framework
 	// --------------------

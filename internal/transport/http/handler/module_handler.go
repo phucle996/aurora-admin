@@ -23,6 +23,7 @@ import (
 type EnabledModuleHandler struct {
 	Svc       *service.EnabledModuleService
 	InstallSv *installsvc.ModuleInstallService
+	RuntimeSv *service.RuntimeBootstrapService
 }
 
 const (
@@ -31,10 +32,15 @@ const (
 	moduleInstallSSEHeartbeatEvery = 10 * time.Second
 )
 
-func NewEnabledModuleHandler(svc *service.EnabledModuleService, installSvc *installsvc.ModuleInstallService) *EnabledModuleHandler {
+func NewEnabledModuleHandler(
+	svc *service.EnabledModuleService,
+	installSvc *installsvc.ModuleInstallService,
+	runtimeSvc *service.RuntimeBootstrapService,
+) *EnabledModuleHandler {
 	return &EnabledModuleHandler{
 		Svc:       svc,
 		InstallSv: installSvc,
+		RuntimeSv: runtimeSvc,
 	}
 }
 
@@ -103,14 +109,17 @@ func (h *EnabledModuleHandler) Install(c *gin.Context) {
 	defer cancel()
 
 	result, err := h.InstallSv.InstallWithLog(ctx, installsvc.ModuleInstallRequest{
-		ModuleName:            moduleName,
-		Scope:                 req.Scope,
-		AgentID:               req.AgentID,
-		AppHost:               req.AppHost,
-		AppPort:               req.AppPort,
-		Endpoint:              req.Endpoint,
-		InstallCommand:        req.InstallCommand,
-		SudoPassword:          normalizeOptionalSecret(req.SudoPassword),
+		ModuleName:     moduleName,
+		Scope:          req.Scope,
+		InstallRuntime: req.InstallRuntime,
+		AgentID:        req.AgentID,
+		AppHost:        req.AppHost,
+		AppPort:        req.AppPort,
+		Endpoint:       req.Endpoint,
+		InstallCommand: req.InstallCommand,
+		Kubeconfig:     req.Kubeconfig,
+		KubeconfigPath: req.KubeconfigPath,
+		SudoPassword:   normalizeOptionalSecret(req.SudoPassword),
 	}, nil)
 	if err != nil {
 		switch {
@@ -211,14 +220,17 @@ func (h *EnabledModuleHandler) InstallStream(c *gin.Context) {
 	defer stopHeartbeat()
 
 	result, err := h.InstallSv.InstallWithLog(ctx, installsvc.ModuleInstallRequest{
-		ModuleName:            moduleName,
-		Scope:                 req.Scope,
-		AgentID:               req.AgentID,
-		AppHost:               req.AppHost,
-		AppPort:               req.AppPort,
-		Endpoint:              req.Endpoint,
-		InstallCommand:        req.InstallCommand,
-		SudoPassword:          normalizeOptionalSecret(req.SudoPassword),
+		ModuleName:     moduleName,
+		Scope:          req.Scope,
+		InstallRuntime: req.InstallRuntime,
+		AgentID:        req.AgentID,
+		AppHost:        req.AppHost,
+		AppPort:        req.AppPort,
+		Endpoint:       req.Endpoint,
+		InstallCommand: req.InstallCommand,
+		Kubeconfig:     req.Kubeconfig,
+		KubeconfigPath: req.KubeconfigPath,
+		SudoPassword:   normalizeOptionalSecret(req.SudoPassword),
 	}, func(stage, message string) {
 		_ = emitEvent("log", stage, message, nil)
 	})
@@ -267,6 +279,25 @@ func (h *EnabledModuleHandler) InstallAgents(c *gin.Context) {
 		"items": output,
 		"count": len(output),
 	}, "module install agent list")
+}
+
+func (h *EnabledModuleHandler) RotateAgentBootstrapToken(c *gin.Context) {
+	if h == nil || h.RuntimeSv == nil {
+		response.RespondServiceUnavailable(c, "runtime bootstrap service unavailable")
+		return
+	}
+
+	result, err := h.RuntimeSv.RotateAgentBootstrapToken(c.Request.Context())
+	if err != nil {
+		response.RespondInternalError(c, err.Error())
+		return
+	}
+
+	response.RespondSuccess(c, gin.H{
+		"token":          result.Token,
+		"token_hash":     result.TokenHash,
+		"cluster_policy": result.ClusterPolicy,
+	}, "agent bootstrap token rotated")
 }
 
 func (h *EnabledModuleHandler) ReinstallCert(c *gin.Context) {

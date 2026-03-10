@@ -47,14 +47,17 @@ func runCommandOnTarget(
 
 func buildInstallTarget(scope string, req ModuleInstallRequest) (moduleInstallTarget, error) {
 	target := moduleInstallTarget{
-		Scope: scope,
-		Port:  22,
+		Scope:          scope,
+		InstallRuntime: normalizeInstallRuntime(req.InstallRuntime),
+		Port:           22,
 	}
 
 	switch scope {
 	case ModuleInstallScopeRemote:
 		target.AgentID = normalizeInstallAgentID(req.AgentID)
 		target.AgentGRPCEndpoint = normalizeAgentGRPCEndpoint(req.AgentGRPCEndpoint)
+		target.Kubeconfig = strings.TrimSpace(req.Kubeconfig)
+		target.KubeconfigPath = strings.TrimSpace(req.KubeconfigPath)
 		target.Username = strings.TrimSpace(req.TargetUser)
 		target.Host = normalizeAddress(req.TargetHost)
 		target.SudoPassword = normalizeOptionalSecret(req.SudoPassword)
@@ -73,6 +76,10 @@ func buildInstallTarget(scope string, req ModuleInstallRequest) (moduleInstallTa
 		}
 		if target.Port <= 0 || target.Port > 65535 {
 			target.Port = 22
+		}
+		if target.InstallRuntime == ModuleInstallRuntimeK8s {
+			target.Port = 0
+			target.Username = ""
 		}
 		return target, nil
 	default:
@@ -195,6 +202,18 @@ func normalizeAddress(raw string) string {
 
 func normalizeScope(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
+}
+
+func normalizeInstallRuntime(raw string) string {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	switch value {
+	case "", ModuleInstallRuntimeLinux:
+		return ModuleInstallRuntimeLinux
+	case ModuleInstallRuntimeK8s:
+		return ModuleInstallRuntimeK8s
+	default:
+		return ModuleInstallRuntimeLinux
+	}
 }
 
 func normalizeModuleName(raw string) string {
