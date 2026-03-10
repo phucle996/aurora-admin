@@ -317,7 +317,7 @@ func (h *EnabledModuleHandler) AgentInstallBootstrapMetadata(c *gin.Context) {
 	}
 
 	response.RespondSuccess(c, gin.H{
-		"admin_grpc_endpoint": "https://" + net.JoinHostPort(host, fmt.Sprintf("%d", h.AppPort)),
+		"admin_grpc_endpoint": net.JoinHostPort(host, fmt.Sprintf("%d", h.AppPort)),
 		"admin_server_name":   host,
 		"admin_grpc_port":     h.AppPort,
 	}, "agent install bootstrap metadata")

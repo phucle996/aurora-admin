@@ -78,6 +78,7 @@ func SeedRuntimeToEtcdIfAbsent(ctx context.Context, cli *clientv3.Client, cfg *C
 		keycfg.RTSecretCacheChannel:          "aurora:token-secret:invalidate",
 		keycfg.RTSecretPollEvery:             "10s",
 		keycfg.RTPlatformKubeconfigCipherKey: platformCipherKey,
+		keycfg.RuntimeAppPortKey("admin"):    strconv.Itoa(cfg.App.Port),
 	}
 	if err := seedValuesIfAbsent(ctx, cli, runtimeValues); err != nil {
 		return fmt.Errorf("seed runtime config failed: %w", err)
@@ -97,6 +98,9 @@ func SeedRuntimeToEtcdIfAbsent(ctx context.Context, cli *clientv3.Client, cfg *C
 		if err := upsertValue(ctx, cli, keycfg.EndpointAdminKey, "running:"+endpoint); err != nil {
 			return fmt.Errorf("upsert admin endpoint failed: %w", err)
 		}
+	}
+	if err := upsertValue(ctx, cli, keycfg.RuntimeAppPortKey("admin"), strconv.Itoa(cfg.App.Port)); err != nil {
+		return fmt.Errorf("upsert admin runtime app port failed: %w", err)
 	}
 
 	return nil

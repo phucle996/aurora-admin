@@ -207,7 +207,7 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 
 	adminRPCEndpoint := ""
 	if moduleName == "ums" || moduleRequiresAdminRPC(moduleName) {
-		adminRPCEndpoint, err = s.resolveAdminBootstrapEndpoint(endpoints.items, endpoints.err)
+		adminRPCEndpoint, err = s.resolveAdminBootstrapEndpoint(ctx, endpoints.items, endpoints.err)
 		if err != nil {
 			return nil, err
 		}
