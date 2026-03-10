@@ -5,6 +5,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import type { ModuleInstallAgent } from "@/hooks/module/use-module-install-api";
 import { cn } from "@/lib/utils";
 
@@ -34,17 +42,6 @@ type ModulePageContentProps = {
   onReinstallCert: (item: ModuleStatusCard) => void;
   actionRunning: boolean;
 };
-
-function formatSeenAt(value: string): string {
-  if (!value.trim()) {
-    return "-";
-  }
-  const parsed = Date.parse(value);
-  if (Number.isNaN(parsed)) {
-    return value;
-  }
-  return new Date(parsed).toLocaleString();
-}
 
 export function ModulePageContent({
   isDark,
@@ -78,7 +75,7 @@ export function ModulePageContent({
     if (!normalizedAgentQuery) {
       return true;
     }
-    const text = `${item.agent_id} ${item.hostname} ${item.host} ${item.ip_address} ${item.status} ${item.agent_grpc_endpoint}`.toLowerCase();
+    const text = `${item.agent_id} ${item.status} ${item.hostname} ${item.agent_grpc_endpoint}`.toLowerCase();
     return text.includes(normalizedAgentQuery);
   });
 
@@ -250,41 +247,48 @@ export function ModulePageContent({
             ) : filteredAgents.length === 0 ? (
               <p className={cn("text-sm", textMuted)}>Khong co agent phu hop bo loc.</p>
             ) : (
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {filteredAgents.map((agent) => {
-                  const connected = agent.status.trim().toLowerCase() === "connected";
-                  return (
-                    <div
-                      key={agent.agent_id}
-                      className={cn(
-                        "rounded-xl border p-3",
-                        isDark ? "border-white/10 bg-slate-950/35" : "border-slate-200 bg-white/80",
-                      )}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <p className={cn("truncate text-sm font-semibold", textPrimary)}>
-                          {agent.agent_id}
-                        </p>
-                        <Badge
-                          variant="outline"
-                          className={connected
-                            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-500"
-                            : "border-amber-500/40 bg-amber-500/10 text-amber-500"}
-                        >
-                          {agent.status || "unknown"}
-                        </Badge>
-                      </div>
-                      <div className={cn("mt-2 space-y-1 text-xs", textMuted)}>
-                        <p>hostname: {agent.hostname || "-"}</p>
-                        <p>host: {agent.host || agent.ip_address || "-"}</p>
-                        <p>grpc: {agent.agent_grpc_endpoint || "-"}</p>
-                        <p>ssh user: {agent.username || "-"}</p>
-                        <p>ssh port: {agent.port || 22}</p>
-                        <p>last seen: {formatSeenAt(agent.last_seen_at)}</p>
-                      </div>
-                    </div>
-                  );
-                })}
+              <div
+                className={cn(
+                  "rounded-xl border p-2",
+                  isDark ? "border-white/10 bg-slate-950/35" : "border-slate-200 bg-white/80",
+                )}
+              >
+                <Table>
+                  <TableHeader>
+                    <TableRow className={isDark ? "border-white/10" : "border-slate-200"}>
+                      <TableHead>Agent ID</TableHead>
+                      <TableHead>Hostname</TableHead>
+                      <TableHead>GRPC Endpoint</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredAgents.map((agent) => (
+                      <TableRow
+                        key={agent.agent_id}
+                        className={isDark ? "border-white/10 hover:bg-white/5" : "border-slate-200"}
+                      >
+                        <TableCell className={cn("font-medium", textPrimary)}>
+                          <span className="inline-flex items-center gap-2">
+                            <span
+                              className={cn(
+                                "h-2.5 w-2.5 rounded-full",
+                                agent.status === "connected" ? "bg-emerald-500" : "bg-rose-500",
+                              )}
+                              title={agent.status || "unknown"}
+                            />
+                            <span>{agent.agent_id || "-"}</span>
+                          </span>
+                        </TableCell>
+                        <TableCell className={cn("font-medium", textPrimary)}>
+                          {agent.hostname || "-"}
+                        </TableCell>
+                        <TableCell className={textPrimary}>
+                          {agent.agent_grpc_endpoint || "-"}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               </div>
             )}
           </section>

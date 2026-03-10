@@ -116,17 +116,14 @@ func (s *ModuleInstallService) resolveModuleTargetByEndpoint(
 			if target.Scope == "" {
 				target.Scope = ModuleInstallScopeRemote
 			}
-			if target.Port <= 0 || target.Port > 65535 {
-				target.Port = 22
-			}
-			if strings.TrimSpace(target.Username) == "" {
-				target.Username = "aurora"
+			if strings.TrimSpace(target.Host) == "" {
+				target.Host = normalizeAddress(hostFromEndpoint(target.AgentGRPCEndpoint))
 			}
 			if strings.TrimSpace(target.Host) == "" {
 				target.Host = normalizeAddress(endpointHost(endpoint))
 			}
 			if strings.TrimSpace(target.Host) == "" {
-				target.Host = detectLocalIPv4()
+				target.Host = "agent-target"
 			}
 			return target, endpoint, nil
 		}

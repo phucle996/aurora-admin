@@ -53,6 +53,7 @@ func NewApplication(cfg *config.Config) (*App, error) {
 		modules.EnabledModuleSvc,
 		modules.ModuleInstallSvc,
 		modules.RuntimeSvc,
+		cfg.App.Port,
 	)
 	// --------------------
 	// gin http framework
@@ -106,7 +107,7 @@ func (a *App) Start(cfg *config.Config) error {
 	a.Server = &http.Server{}
 	handler := a.muxHTTPAndGRPC()
 
-	tlsCfg, tlsErr := buildServerTLSConfig(cfg.App)
+	tlsCfg, tlsErr := buildServerTLSConfig(cfg.App, cfg.AgentMTLS.CACert)
 	if tlsErr != nil {
 		_ = ln.Close()
 		return tlsErr
@@ -128,7 +129,7 @@ func (a *App) Start(cfg *config.Config) error {
 	return nil
 }
 
-func buildServerTLSConfig(cfg config.AppCfg) (*tls.Config, error) {
+func buildServerTLSConfig(cfg config.AppCfg, agentCACertPath string) (*tls.Config, error) {
 	certFile := strings.TrimSpace(cfg.TLSCert)
 	keyFile := strings.TrimSpace(cfg.TLSKey)
 	if certFile == "" || keyFile == "" {
@@ -156,6 +157,36 @@ func buildServerTLSConfig(cfg config.AppCfg) (*tls.Config, error) {
 		if !pool.AppendCertsFromPEM(caPEM) {
 			return nil, fmt.Errorf("invalid tls ca pem")
 		}
+		agentCA := strings.TrimSpace(agentCACertPath)
+		if agentCA != "" && agentCA != caFile {
+			agentCAPEM, agentReadErr := os.ReadFile(agentCA)
+			if agentReadErr != nil {
+				return nil, fmt.Errorf("read agent tls ca file failed: %w", agentReadErr)
+			}
+			if !pool.AppendCertsFromPEM(agentCAPEM) {
+				return nil, fmt.Errorf("invalid agent tls ca pem")
+			}
+		}
+
+		leaf, parseLeafErr := x509.ParseCertificate(cert.Certificate[0])
+		if parseLeafErr != nil {
+			return nil, fmt.Errorf("parse server tls leaf certificate failed: %w", parseLeafErr)
+		}
+		intermediates := x509.NewCertPool()
+		for i := 1; i < len(cert.Certificate); i++ {
+			if parsed, parseErr := x509.ParseCertificate(cert.Certificate[i]); parseErr == nil {
+				intermediates.AddCert(parsed)
+			}
+		}
+		verifyOpts := x509.VerifyOptions{
+			Roots:         pool,
+			Intermediates: intermediates,
+			CurrentTime:   time.Now(),
+		}
+		if _, verifyErr := leaf.Verify(verifyOpts); verifyErr != nil {
+			return nil, fmt.Errorf("tls server cert is not signed by APP_TLS_CA_FILE: %w", verifyErr)
+		}
+
 		tlsCfg.ClientCAs = pool
 		// Allow first-time agent bootstrap over one-way TLS; sensitive RPCs still enforce mTLS in handler.
 		tlsCfg.ClientAuth = tls.VerifyClientCertIfGiven

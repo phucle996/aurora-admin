@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -14,15 +13,44 @@ type InstallAgent struct {
 	AgentID           string `json:"agent_id"`
 	Status            string `json:"status"`
 	Hostname          string `json:"hostname"`
-	IPAddress         string `json:"ip_address"`
 	AgentGRPCEndpoint string `json:"agent_grpc_endpoint"`
-	LastSeenAt        string `json:"last_seen_at"`
-	Host              string `json:"host"`
-	Port              int32  `json:"port"`
-	Username          string `json:"username"`
+}
+
+type installAgentRuntimeDetails struct {
+	InstallAgent
+	Status      string
+	IPAddress   string
+	Host        string
+	peerHost    string
+	peerAddress string
+	probeAddr   string
 }
 
 func (s *ModuleInstallService) ListInstallAgents(ctx context.Context) ([]InstallAgent, error) {
+	details, err := s.listInstallAgentsRuntime(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]InstallAgent, 0, len(details))
+	for _, item := range details {
+		if item.AgentID == "" {
+			continue
+		}
+		out = append(out, InstallAgent{
+			AgentID:           item.AgentID,
+			Status:            strings.TrimSpace(item.Status),
+			Hostname:          item.Hostname,
+			AgentGRPCEndpoint: item.AgentGRPCEndpoint,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].AgentID < out[j].AgentID
+	})
+	return out, nil
+}
+
+func (s *ModuleInstallService) listInstallAgentsRuntime(ctx context.Context) ([]installAgentRuntimeDetails, error) {
 	if s == nil || s.runtimeRepo == nil {
 		return nil, fmt.Errorf("module install service is nil")
 	}
@@ -33,10 +61,7 @@ func (s *ModuleInstallService) ListInstallAgents(ctx context.Context) ([]Install
 	}
 
 	type draft struct {
-		InstallAgent
-		peerHost    string
-		peerAddress string
-		probeAddr   string
+		installAgentRuntimeDetails
 	}
 
 	drafts := map[string]*draft{}
@@ -48,9 +73,10 @@ func (s *ModuleInstallService) ListInstallAgents(ctx context.Context) ([]Install
 		item, exists := drafts[agentID]
 		if !exists {
 			item = &draft{
-				InstallAgent: InstallAgent{
-					AgentID: agentID,
-					Port:    22,
+				installAgentRuntimeDetails: installAgentRuntimeDetails{
+					InstallAgent: InstallAgent{
+						AgentID: agentID,
+					},
 				},
 			}
 			drafts[agentID] = item
@@ -72,21 +98,15 @@ func (s *ModuleInstallService) ListInstallAgents(ctx context.Context) ([]Install
 		case "probe_addr":
 			item.probeAddr = value
 		case "last_seen_at":
-			item.LastSeenAt = value
+			// keep in etcd for future UI extension; currently not exposed in API
 		case "peer/host":
 			item.peerHost = value
 		case "peer/address":
 			item.peerAddress = value
-		case "username":
-			item.Username = value
-		case "port":
-			if parsed, parseErr := strconv.Atoi(value); parseErr == nil && parsed > 0 && parsed <= 65535 {
-				item.Port = int32(parsed)
-			}
 		}
 	}
 
-	out := make([]InstallAgent, 0, len(drafts))
+	out := make([]installAgentRuntimeDetails, 0, len(drafts))
 	for _, item := range drafts {
 		item.AgentGRPCEndpoint = firstNonEmpty(
 			item.AgentGRPCEndpoint,
@@ -98,16 +118,10 @@ func (s *ModuleInstallService) ListInstallAgents(ctx context.Context) ([]Install
 			hostFromEndpoint(item.AgentGRPCEndpoint),
 			hostFromAddress(item.peerAddress),
 		)
-		if item.Username == "" {
-			item.Username = "aurora"
-		}
-		if item.Port <= 0 || item.Port > 65535 {
-			item.Port = 22
-		}
 		if item.AgentID == "" {
 			continue
 		}
-		out = append(out, item.InstallAgent)
+		out = append(out, item.installAgentRuntimeDetails)
 	}
 
 	sort.Slice(out, func(i, j int) bool {
@@ -142,8 +156,6 @@ func (s *ModuleInstallService) hydrateInstallTargetFromAgent(
 		keycfg.RuntimeAgentNodeKey(agentID, "grpc_endpoint"),
 		keycfg.RuntimeAgentNodeKey(agentID, "peer/host"),
 		keycfg.RuntimeAgentNodeKey(agentID, "peer/address"),
-		keycfg.RuntimeAgentNodeKey(agentID, "username"),
-		keycfg.RuntimeAgentNodeKey(agentID, "port"),
 	}
 	values, err := s.runtimeRepo.GetMany(ctx, keys)
 	if err != nil {
@@ -185,33 +197,12 @@ func (s *ModuleInstallService) hydrateInstallTargetFromAgent(
 	}
 	req.TargetHost = resolvedHost
 
-	if req.TargetPort <= 0 || req.TargetPort > 65535 {
-		storedPortRaw := strings.TrimSpace(values[keycfg.RuntimeAgentNodeKey(agentID, "port")])
-		if storedPortRaw != "" {
-			if parsed, parseErr := strconv.Atoi(storedPortRaw); parseErr == nil && parsed > 0 && parsed <= 65535 {
-				req.TargetPort = int32(parsed)
-			}
-		}
-	}
-	if req.TargetPort <= 0 || req.TargetPort > 65535 {
-		req.TargetPort = 22
-	}
-
-	if strings.TrimSpace(req.TargetUser) == "" {
-		req.TargetUser = strings.TrimSpace(values[keycfg.RuntimeAgentNodeKey(agentID, "username")])
-	}
-	if strings.TrimSpace(req.TargetUser) == "" {
-		req.TargetUser = "aurora"
-	}
-
 	logInstall(
 		logFn,
 		"target",
-		"resolved target from agent_id=%s host=%s port=%d user=%s",
+		"resolved target from agent_id=%s host=%s",
 		agentID,
 		req.TargetHost,
-		req.TargetPort,
-		req.TargetUser,
 	)
 	return nil
 }

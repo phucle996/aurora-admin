@@ -5,6 +5,10 @@ APP_HOSTNAME=admin.aurora.local
 APP_PORT=3009
 APP_LOG_LEVEL=info
 APP_TIMEZONE=Asia/Ho_Chi_Minh
+APP_AGENT_TLS_CA_CERT_FILE=/etc/aurora/certs/agent-ca.crt
+APP_AGENT_TLS_CA_KEY_FILE=/etc/aurora/certs/agent-ca.key
+APP_AGENT_TLS_ADMIN_CLIENT_CERT_FILE=/etc/aurora/certs/admin-agent-client.crt
+APP_AGENT_TLS_ADMIN_CLIENT_KEY_FILE=/etc/aurora/certs/admin-agent-client.key
 
 ETCD_ENDPOINTS=127.0.0.1:2379
 ETCD_AUTO_SYNC_INTERVAL=5m

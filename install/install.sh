@@ -20,6 +20,10 @@ TLS_CERT_FILE="${TLS_DIR}/admin.crt"
 TLS_KEY_FILE="${TLS_DIR}/admin.key"
 TLS_CA_FILE="${TLS_DIR}/ca.crt"
 TLS_CA_KEY_FILE="${TLS_DIR}/ca.key"
+AGENT_TLS_CA_FILE="${TLS_DIR}/agent-ca.crt"
+AGENT_TLS_CA_KEY_FILE="${TLS_DIR}/agent-ca.key"
+AGENT_TLS_ADMIN_CLIENT_CERT_FILE="${TLS_DIR}/admin-agent-client.crt"
+AGENT_TLS_ADMIN_CLIENT_KEY_FILE="${TLS_DIR}/admin-agent-client.key"
 TLS_NGINX_CLIENT_CERT_FILE="${TLS_DIR}/nginx-client.crt"
 TLS_NGINX_CLIENT_KEY_FILE="${TLS_DIR}/nginx-client.key"
 ADMIN_SSH_DIR="${AURORA_ADMIN_SSH_DIR:-/etc/aurora/ssh/admin-installer}"
@@ -432,6 +436,10 @@ APP_HOSTNAME=aurora-admin.local
 APP_PORT=3009
 APP_LOG_LEVEL=info
 APP_TIMEZONE=Asia/Ho_Chi_Minh
+APP_AGENT_TLS_CA_CERT_FILE=/etc/aurora/certs/agent-ca.crt
+APP_AGENT_TLS_CA_KEY_FILE=/etc/aurora/certs/agent-ca.key
+APP_AGENT_TLS_ADMIN_CLIENT_CERT_FILE=/etc/aurora/certs/admin-agent-client.crt
+APP_AGENT_TLS_ADMIN_CLIENT_KEY_FILE=/etc/aurora/certs/admin-agent-client.key
 
 ETCD_ENDPOINTS=127.0.0.1:2379
 ETCD_AUTO_SYNC_INTERVAL=5m
@@ -504,7 +512,9 @@ install_env_file() {
 
 install_tls_materials() {
   local env_file="$1"
-  local app_host cert_tmp key_tmp ca_tmp ca_key_tmp csr_tmp ext_tmp nginx_key_tmp nginx_csr_tmp nginx_ext_tmp nginx_cert_tmp
+  local app_host cert_tmp key_tmp ca_tmp ca_key_tmp csr_tmp ext_tmp
+  local agent_ca_tmp agent_ca_key_tmp agent_client_key_tmp agent_client_csr_tmp agent_client_ext_tmp agent_client_cert_tmp
+  local nginx_key_tmp nginx_csr_tmp nginx_ext_tmp nginx_cert_tmp
   ensure_tls_dir
   app_host="$(read_env_value "APP_HOSTNAME" "$env_file")"
   [ -n "$app_host" ] || app_host="aurora-admin.local"
@@ -515,12 +525,18 @@ install_tls_materials() {
   ca_key_tmp="${TMP_DIR}/ca.key"
   csr_tmp="${TMP_DIR}/admin.csr"
   ext_tmp="${TMP_DIR}/admin.ext"
+  agent_ca_tmp="${TMP_DIR}/agent-ca.crt"
+  agent_ca_key_tmp="${TMP_DIR}/agent-ca.key"
+  agent_client_key_tmp="${TMP_DIR}/admin-agent-client.key"
+  agent_client_csr_tmp="${TMP_DIR}/admin-agent-client.csr"
+  agent_client_ext_tmp="${TMP_DIR}/admin-agent-client.ext"
+  agent_client_cert_tmp="${TMP_DIR}/admin-agent-client.crt"
   nginx_key_tmp="${TMP_DIR}/nginx-client.key"
   nginx_csr_tmp="${TMP_DIR}/nginx-client.csr"
   nginx_ext_tmp="${TMP_DIR}/nginx-client.ext"
   nginx_cert_tmp="${TMP_DIR}/nginx-client.crt"
 
-  log "generate self-signed tls cert/key/ca"
+  log "generate self-signed tls cert/key/ca (edge + agent mTLS)"
   openssl genrsa -out "$ca_key_tmp" 4096 >/dev/null 2>&1
   openssl req -x509 -new -nodes \
     -key "$ca_key_tmp" \
@@ -552,6 +568,37 @@ EOF
     -sha256 \
     -extfile "$ext_tmp" >/dev/null 2>&1
 
+  openssl genrsa -out "$agent_ca_key_tmp" 4096 >/dev/null 2>&1
+  openssl req -x509 -new -nodes \
+    -key "$agent_ca_key_tmp" \
+    -sha256 \
+    -days 3650 \
+    -out "$agent_ca_tmp" \
+    -subj "/CN=Aurora Agent mTLS CA" >/dev/null 2>&1
+
+  openssl genrsa -out "$agent_client_key_tmp" 2048 >/dev/null 2>&1
+  openssl req -new \
+    -key "$agent_client_key_tmp" \
+    -out "$agent_client_csr_tmp" \
+    -subj "/CN=aurora-admin-agent-client" >/dev/null 2>&1
+
+  cat > "$agent_client_ext_tmp" <<EOF
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = clientAuth
+subjectAltName = DNS:aurora-admin-agent-client,DNS:${app_host},DNS:localhost,IP:127.0.0.1
+EOF
+
+  openssl x509 -req \
+    -in "$agent_client_csr_tmp" \
+    -CA "$agent_ca_tmp" \
+    -CAkey "$agent_ca_key_tmp" \
+    -CAcreateserial \
+    -out "$agent_client_cert_tmp" \
+    -days 825 \
+    -sha256 \
+    -extfile "$agent_client_ext_tmp" >/dev/null 2>&1
+
   openssl genrsa -out "$nginx_key_tmp" 2048 >/dev/null 2>&1
   openssl req -new \
     -key "$nginx_key_tmp" \
@@ -579,6 +626,10 @@ EOF
   as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$key_tmp" "$TLS_KEY_FILE"
   as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$ca_tmp" "$TLS_CA_FILE"
   as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$ca_key_tmp" "$TLS_CA_KEY_FILE"
+  as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$agent_ca_tmp" "$AGENT_TLS_CA_FILE"
+  as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$agent_ca_key_tmp" "$AGENT_TLS_CA_KEY_FILE"
+  as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$agent_client_cert_tmp" "$AGENT_TLS_ADMIN_CLIENT_CERT_FILE"
+  as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$agent_client_key_tmp" "$AGENT_TLS_ADMIN_CLIENT_KEY_FILE"
   as_root install -m 0444 -o root -g root "$nginx_cert_tmp" "$TLS_NGINX_CLIENT_CERT_FILE"
   as_root install -m 0400 -o root -g root "$nginx_key_tmp" "$TLS_NGINX_CLIENT_KEY_FILE"
 }
@@ -586,11 +637,15 @@ EOF
 preflight_tls_materials() {
   log "preflight tls materials"
   as_root test -d "$TLS_DIR" || die "tls preflight failed: missing dir $TLS_DIR"
-  for path in "$TLS_CERT_FILE" "$TLS_KEY_FILE" "$TLS_CA_FILE" "$TLS_CA_KEY_FILE" "$TLS_NGINX_CLIENT_CERT_FILE" "$TLS_NGINX_CLIENT_KEY_FILE"; do
+  for path in \
+    "$TLS_CERT_FILE" "$TLS_KEY_FILE" "$TLS_CA_FILE" "$TLS_CA_KEY_FILE" \
+    "$AGENT_TLS_CA_FILE" "$AGENT_TLS_CA_KEY_FILE" "$AGENT_TLS_ADMIN_CLIENT_CERT_FILE" "$AGENT_TLS_ADMIN_CLIENT_KEY_FILE" \
+    "$TLS_NGINX_CLIENT_CERT_FILE" "$TLS_NGINX_CLIENT_KEY_FILE"; do
     as_root test -s "$path" || die "tls preflight failed: missing file $path"
   done
 
   local cert_check key_check ca_check verify_check cert_mod key_mod
+  local agent_ca_check agent_ca_key_check agent_verify_check agent_client_mod agent_client_key_mod
   cert_check="$(as_root openssl x509 -in "$TLS_CERT_FILE" -noout 2>&1)" || die "tls preflight failed: invalid cert ${TLS_CERT_FILE}: ${cert_check}"
   key_check="$(as_root openssl rsa -in "$TLS_KEY_FILE" -check -noout 2>&1)" || die "tls preflight failed: invalid key ${TLS_KEY_FILE}: ${key_check}"
   ca_check="$(as_root openssl x509 -in "$TLS_CA_FILE" -noout 2>&1)" || die "tls preflight failed: invalid ca ${TLS_CA_FILE}: ${ca_check}"
@@ -601,6 +656,15 @@ preflight_tls_materials() {
   [ -n "$cert_mod" ] || die "tls preflight failed: cannot read cert modulus"
   [ -n "$key_mod" ] || die "tls preflight failed: cannot read key modulus"
   [ "$cert_mod" = "$key_mod" ] || die "tls preflight failed: cert/key mismatch"
+
+  agent_ca_check="$(as_root openssl x509 -in "$AGENT_TLS_CA_FILE" -noout 2>&1)" || die "tls preflight failed: invalid agent ca ${AGENT_TLS_CA_FILE}: ${agent_ca_check}"
+  agent_ca_key_check="$(as_root openssl rsa -in "$AGENT_TLS_CA_KEY_FILE" -check -noout 2>&1)" || die "tls preflight failed: invalid agent ca key ${AGENT_TLS_CA_KEY_FILE}: ${agent_ca_key_check}"
+  agent_verify_check="$(as_root openssl verify -CAfile "$AGENT_TLS_CA_FILE" "$AGENT_TLS_ADMIN_CLIENT_CERT_FILE" 2>&1)" || die "tls preflight failed: admin agent client cert is not signed by agent ca: ${agent_verify_check}"
+  agent_client_mod="$(as_root openssl x509 -noout -modulus -in "$AGENT_TLS_ADMIN_CLIENT_CERT_FILE" | openssl md5 2>/dev/null | awk '{print $NF}')"
+  agent_client_key_mod="$(as_root openssl rsa -noout -modulus -in "$AGENT_TLS_ADMIN_CLIENT_KEY_FILE" | openssl md5 2>/dev/null | awk '{print $NF}')"
+  [ -n "$agent_client_mod" ] || die "tls preflight failed: cannot read admin agent client cert modulus"
+  [ -n "$agent_client_key_mod" ] || die "tls preflight failed: cannot read admin agent client key modulus"
+  [ "$agent_client_mod" = "$agent_client_key_mod" ] || die "tls preflight failed: admin agent client cert/key mismatch"
 }
 
 ensure_nginx_installed() {

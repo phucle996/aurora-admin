@@ -13,6 +13,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -39,6 +41,9 @@ func NewModules(
 ) (*Modules, error) {
 	if cfg == nil {
 		return nil, errors.New("config is nil")
+	}
+	if err := validateAgentMTLSConfig(cfg); err != nil {
+		return nil, err
 	}
 
 	etcdClient, err := etcdinfra.NewClient(&cfg.Etcd)
@@ -121,9 +126,9 @@ func NewModules(
 		certStoreRepo,
 		cfg.CertStore.Prefix,
 		cfg.Database.URL,
-		cfg.App.TLSCA,
-		cfg.App.TLSCert,
-		cfg.App.TLSKey,
+		cfg.AgentMTLS.CACert,
+		cfg.AgentMTLS.AdminClientCert,
+		cfg.AgentMTLS.AdminClientKey,
 		map[string]string{
 			"ums":      cfg.ModuleInstall.UMSInstallScriptURL,
 			"platform": cfg.ModuleInstall.PlatformInstallScriptURL,
@@ -137,9 +142,19 @@ func NewModules(
 		enabledModuleRepo,
 		certStoreRepo,
 		cfg.CertStore.Prefix,
-		cfg.App.TLSCA,
-		cfg.App.TLSCAKey,
+		cfg.AgentMTLS.CACert,
+		cfg.AgentMTLS.CAKey,
 	)
+	if err := runtimeSvc.SeedControlPlaneTrustStore(ctx, apisvc.ControlPlaneTrustSeedInput{
+		AdminCACertPath:          cfg.App.TLSCA,
+		AdminServerCertPath:      cfg.App.TLSCert,
+		AgentCACertPath:          cfg.AgentMTLS.CACert,
+		AgentAdminClientCertPath: cfg.AgentMTLS.AdminClientCert,
+	}); err != nil {
+		_ = etcdClient.Close()
+		_ = redisClient.Close()
+		return nil, err
+	}
 
 	return &Modules{
 		Etcd:             etcdClient,
@@ -151,4 +166,36 @@ func NewModules(
 		ModuleInstallSvc: moduleInstallSvc,
 		RuntimeSvc:       runtimeSvc,
 	}, nil
+}
+
+func validateAgentMTLSConfig(cfg *config.Config) error {
+	if cfg == nil {
+		return errors.New("config is nil")
+	}
+	agentCACert := normalizePath(cfg.AgentMTLS.CACert)
+	agentCAKey := normalizePath(cfg.AgentMTLS.CAKey)
+	agentClientCert := normalizePath(cfg.AgentMTLS.AdminClientCert)
+	agentClientKey := normalizePath(cfg.AgentMTLS.AdminClientKey)
+	if agentCACert == "" || agentCAKey == "" || agentClientCert == "" || agentClientKey == "" {
+		return fmt.Errorf("agent mTLS config is incomplete (require APP_AGENT_TLS_CA_CERT_FILE, APP_AGENT_TLS_CA_KEY_FILE, APP_AGENT_TLS_ADMIN_CLIENT_CERT_FILE, APP_AGENT_TLS_ADMIN_CLIENT_KEY_FILE)")
+	}
+
+	appCACert := normalizePath(cfg.App.TLSCA)
+	appCAKey := normalizePath(cfg.App.TLSCAKey)
+	if appCACert != "" && appCACert == agentCACert {
+		return fmt.Errorf("agent mTLS CA cert must be separate from app TLS CA cert")
+	}
+	if appCAKey != "" && appCAKey == agentCAKey {
+		return fmt.Errorf("agent mTLS CA key must be separate from app TLS CA key")
+	}
+	return nil
+}
+
+func normalizePath(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	clean := filepath.Clean(trimmed)
+	return strings.TrimSpace(clean)
 }

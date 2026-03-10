@@ -33,8 +33,6 @@ type ModuleInstallRequest struct {
 	Kubeconfig        string
 	KubeconfigPath    string
 	TargetHost        string
-	TargetPort        int32
-	TargetUser        string
 	SudoPassword      *string
 }
 
@@ -62,9 +60,7 @@ type moduleInstallTarget struct {
 	AgentGRPCEndpoint string
 	Kubeconfig        string
 	KubeconfigPath    string
-	Username          string
 	Host              string
-	Port              int32
 	SudoPassword      *string
 }
 
@@ -163,12 +159,8 @@ func (s *ModuleInstallService) InstallWithLog(ctx context.Context, req ModuleIns
 		return nil, err
 	}
 	logInstall(logFn, "install", "start module=%s scope=%s runtime=%s app_host=%s app_port=%d endpoint=%s", moduleName, scope, installRuntime, appHost, endpointPort, endpoint)
-	logInstall(logFn, "target", "target host=%s port=%d user=%s", target.Host, target.Port, target.Username)
+	logInstall(logFn, "target", "target host=%s", target.Host)
 	if !isK8sRuntime {
-		if preflightErr := ensureTargetInstallPrivilege(ctx, target, logFn); preflightErr != nil {
-			logInstall(logFn, "preflight", "[error] %v", preflightErr)
-			return nil, preflightErr
-		}
 		resolvedPort, portErr := resolveInstallPortForTarget(ctx, target, endpointPort, req.AppPort > 0)
 		if portErr != nil {
 			logInstall(logFn, "install", "[error] %v", portErr)

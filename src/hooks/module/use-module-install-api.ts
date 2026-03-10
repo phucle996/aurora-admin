@@ -20,18 +20,19 @@ export type ModuleInstallAgent = {
   agent_id: string;
   status: string;
   hostname: string;
-  ip_address: string;
   agent_grpc_endpoint: string;
-  last_seen_at: string;
-  host: string;
-  port: number;
-  username: string;
 };
 
 export type AgentBootstrapTokenResponse = {
   token: string;
   token_hash: string;
   cluster_policy: string;
+};
+
+export type AgentInstallBootstrapMetadata = {
+  admin_grpc_endpoint: string;
+  admin_server_name: string;
+  admin_grpc_port: number;
 };
 
 export type ModuleInstallResult = {
@@ -105,12 +106,7 @@ function parseModuleInstallAgent(raw: unknown): ModuleInstallAgent {
     agent_id: toStringValue(row.agent_id),
     status: toStringValue(row.status),
     hostname: toStringValue(row.hostname),
-    ip_address: toStringValue(row.ip_address),
     agent_grpc_endpoint: toStringValue(row.agent_grpc_endpoint),
-    last_seen_at: toStringValue(row.last_seen_at),
-    host: toStringValue(row.host),
-    port: toNumberValue(row.port),
-    username: toStringValue(row.username),
   };
 }
 
@@ -176,6 +172,40 @@ export async function rotateAgentBootstrapToken(): Promise<AgentBootstrapTokenRe
     token: toStringValue(body.token),
     token_hash: toStringValue(body.token_hash),
     cluster_policy: toStringValue(body.cluster_policy),
+  };
+}
+
+export async function getAgentInstallBootstrapMetadata(): Promise<AgentInstallBootstrapMetadata> {
+  const baseURL = resolveAdminBaseURL();
+  const path = "/api/v1/modules/install/agent-bootstrap-metadata";
+  const url = baseURL ? new URL(path, baseURL).toString() : path;
+
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+    },
+    credentials: "include",
+  });
+
+  const text = await res.text();
+  let parsed: ModuleInstallApiResponse | null = null;
+  try {
+    parsed = JSON.parse(text) as ModuleInstallApiResponse;
+  } catch {
+    parsed = null;
+  }
+
+  if (!res.ok) {
+    const detail = toStringValue(parsed?.message ?? parsed?.error) || toSingleLine(text);
+    throw new Error(`Load agent bootstrap metadata failed (HTTP ${res.status} ${res.statusText}): ${detail || "empty response"}`);
+  }
+
+  const body = (parsed?.data ?? {}) as Record<string, unknown>;
+  return {
+    admin_grpc_endpoint: toStringValue(body.admin_grpc_endpoint),
+    admin_server_name: toStringValue(body.admin_server_name),
+    admin_grpc_port: toNumberValue(body.admin_grpc_port),
   };
 }
 

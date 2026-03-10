@@ -22,6 +22,13 @@ type AppCfg struct {
 	TLSCAKey string
 }
 
+type AgentMTLSCfg struct {
+	CACert          string
+	CAKey           string
+	AdminClientCert string
+	AdminClientKey  string
+}
+
 type EtcdCfg struct {
 	Endpoints []string
 
@@ -112,6 +119,7 @@ type ModuleInstallCfg struct {
 }
 type Config struct {
 	App           AppCfg
+	AgentMTLS     AgentMTLSCfg
 	Etcd          EtcdCfg
 	Database      DatabaseCfg
 	Redis         RedisCfg
@@ -137,6 +145,12 @@ func LoadConfig() *Config {
 			TLSKey:   "/etc/aurora/certs/admin.key",
 			TLSCA:    "/etc/aurora/certs/ca.crt",
 			TLSCAKey: getEnv("APP_TLS_CA_KEY_FILE", "/etc/aurora/certs/ca.key"),
+		},
+		AgentMTLS: AgentMTLSCfg{
+			CACert:          getEnv("APP_AGENT_TLS_CA_CERT_FILE", "/etc/aurora/certs/agent-ca.crt"),
+			CAKey:           getEnv("APP_AGENT_TLS_CA_KEY_FILE", "/etc/aurora/certs/agent-ca.key"),
+			AdminClientCert: getEnv("APP_AGENT_TLS_ADMIN_CLIENT_CERT_FILE", "/etc/aurora/certs/admin-agent-client.crt"),
+			AdminClientKey:  getEnv("APP_AGENT_TLS_ADMIN_CLIENT_KEY_FILE", "/etc/aurora/certs/admin-agent-client.key"),
 		},
 		Etcd: EtcdCfg{
 			Endpoints:            getEnvAsSlice("ETCD_ENDPOINTS", []string{"localhost:2379"}),
