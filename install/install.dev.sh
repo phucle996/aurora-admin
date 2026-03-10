@@ -25,10 +25,6 @@ AGENT_TLS_ADMIN_CLIENT_CERT_FILE="${TLS_DIR}/admin-agent-client.crt"
 AGENT_TLS_ADMIN_CLIENT_KEY_FILE="${TLS_DIR}/admin-agent-client.key"
 TLS_NGINX_CLIENT_CERT_FILE="${TLS_DIR}/nginx-client.crt"
 TLS_NGINX_CLIENT_KEY_FILE="${TLS_DIR}/nginx-client.key"
-ADMIN_SSH_DIR="${AURORA_ADMIN_SSH_DIR:-/etc/aurora/ssh/admin-installer}"
-ADMIN_SSH_PRIVATE_KEY_FILE="${ADMIN_SSH_DIR}/id_ed25519"
-ADMIN_SSH_PUBLIC_KEY_FILE="${ADMIN_SSH_PRIVATE_KEY_FILE}.pub"
-ADMIN_ROOT_AUTH_KEYS="${AURORA_ADMIN_ROOT_AUTH_KEYS:-/root/.ssh/authorized_keys}"
 NGINX_SERVICE_NAME="${AURORA_ADMIN_NGINX_SERVICE_NAME:-nginx}"
 NGINX_CONF_FILE="${AURORA_ADMIN_NGINX_CONF_FILE:-/etc/nginx/conf.d/aurora-admin.conf}"
 NGINX_TEMPLATE_FILE="${AURORA_ADMIN_NGINX_TEMPLATE_FILE:-${SCRIPT_DIR}/nginx.conf}"
@@ -216,78 +212,6 @@ ensure_service_user_sudo_group() {
     fi
     warn "cannot add ${SERVICE_USER} to sudo group automatically"
   fi
-}
-
-ensure_ssh_installed() {
-  if command -v ssh >/dev/null 2>&1 && command -v sshd >/dev/null 2>&1; then
-    return
-  fi
-
-  log "install openssh client/server"
-  if command -v apt-get >/dev/null 2>&1; then
-    as_root apt-get install -y openssh-client openssh-server
-    return
-  fi
-  if command -v dnf >/dev/null 2>&1; then
-    as_root dnf install -y openssh-clients openssh-server
-    return
-  fi
-  if command -v yum >/dev/null 2>&1; then
-    as_root yum install -y openssh-clients openssh-server
-    return
-  fi
-  if command -v apk >/dev/null 2>&1; then
-    as_root apk add --no-cache openssh-client openssh-server
-    return
-  fi
-
-  die "cannot install openssh automatically (unsupported package manager)"
-}
-
-enable_ssh_service() {
-  local ssh_service=""
-  if as_root systemctl list-unit-files | awk '{print $1}' | grep -qx "ssh.service"; then
-    ssh_service="ssh.service"
-  elif as_root systemctl list-unit-files | awk '{print $1}' | grep -qx "sshd.service"; then
-    ssh_service="sshd.service"
-  fi
-  [ -n "$ssh_service" ] || die "cannot detect ssh service unit (ssh.service/sshd.service)"
-
-  as_root ssh-keygen -A >/dev/null 2>&1 || true
-  as_root systemctl daemon-reload
-  as_root systemctl enable "$ssh_service"
-  as_root systemctl restart "$ssh_service"
-}
-
-ensure_admin_ssh_keypair() {
-  ensure_ssh_installed
-  enable_ssh_service
-
-  as_root mkdir -p "$ADMIN_SSH_DIR"
-  as_root chmod 750 "$ADMIN_SSH_DIR"
-  as_root chown "$SERVICE_USER:$SERVICE_GROUP" "$ADMIN_SSH_DIR"
-
-  if ! as_root test -s "$ADMIN_SSH_PRIVATE_KEY_FILE"; then
-    log "generate admin installer ssh keypair"
-    as_root ssh-keygen -t ed25519 -N "" -f "$ADMIN_SSH_PRIVATE_KEY_FILE" -C "aurora-admin-installer@$(hostname -f 2>/dev/null || hostname)" >/dev/null
-  fi
-
-  as_root chmod 600 "$ADMIN_SSH_PRIVATE_KEY_FILE"
-  as_root chmod 644 "$ADMIN_SSH_PUBLIC_KEY_FILE"
-  as_root chown "$SERVICE_USER:$SERVICE_GROUP" "$ADMIN_SSH_PRIVATE_KEY_FILE" "$ADMIN_SSH_PUBLIC_KEY_FILE"
-
-  as_root mkdir -p "$(dirname "$ADMIN_ROOT_AUTH_KEYS")"
-  as_root chmod 700 "$(dirname "$ADMIN_ROOT_AUTH_KEYS")"
-  as_root touch "$ADMIN_ROOT_AUTH_KEYS"
-  as_root chmod 600 "$ADMIN_ROOT_AUTH_KEYS"
-
-  local pub_line
-  pub_line="$(as_root cat "$ADMIN_SSH_PUBLIC_KEY_FILE")"
-  if ! as_root grep -qxF "$pub_line" "$ADMIN_ROOT_AUTH_KEYS"; then
-    printf '%s\n' "$pub_line" | as_root tee -a "$ADMIN_ROOT_AUTH_KEYS" >/dev/null
-  fi
-
-  log "admin ssh key ready: ${ADMIN_SSH_PRIVATE_KEY_FILE}"
 }
 
 ensure_tls_dir() {
@@ -737,6 +661,73 @@ render_nginx_template() {
   normalize_nginx_compression "$dst" "$brotli_enabled"
 }
 
+migrate_nginx_http2_deprecated_file() {
+  local file="$1"
+  [ -f "$file" ] || return 0
+
+  local tmp_file="${TMP_DIR}/$(basename "$file").http2fix"
+  awk '
+    BEGIN {
+      in_server = 0
+      depth = 0
+      has_http2 = 0
+      needs_http2 = 0
+    }
+    {
+      line = $0
+      if (!in_server && line ~ /^[[:space:]]*server[[:space:]]*\{[[:space:]]*$/) {
+        in_server = 1
+        depth = 0
+        has_http2 = 0
+        needs_http2 = 0
+      }
+
+      if (in_server && line ~ /^[[:space:]]*http2[[:space:]]+on;[[:space:]]*$/) {
+        has_http2 = 1
+      }
+      if (in_server && line ~ /^[[:space:]]*listen[[:space:]]+443[[:space:]]+ssl[[:space:]]+http2;[[:space:]]*$/) {
+        sub(/[[:space:]]+http2;/, ";", line)
+        needs_http2 = 1
+      }
+      if (in_server && line ~ /^[[:space:]]*listen[[:space:]]+\[::\]:443[[:space:]]+ssl[[:space:]]+http2;[[:space:]]*$/) {
+        sub(/[[:space:]]+http2;/, ";", line)
+        needs_http2 = 1
+      }
+
+      if (in_server && depth == 1 && line ~ /^[[:space:]]*}[[:space:]]*$/) {
+        if (needs_http2 && !has_http2) {
+          print "  http2 on;"
+          has_http2 = 1
+        }
+      }
+
+      print line
+
+      if (in_server) {
+        open_count = gsub(/\{/, "{", line)
+        close_count = gsub(/\}/, "}", line)
+        depth += open_count
+        depth -= close_count
+        if (depth <= 0) {
+          in_server = 0
+          depth = 0
+          has_http2 = 0
+          needs_http2 = 0
+        }
+      }
+    }
+  ' "$file" > "$tmp_file"
+  as_root install -m 0644 -o root -g root "$tmp_file" "$file"
+}
+
+migrate_nginx_http2_deprecated_all() {
+  local conf
+  for conf in /etc/nginx/conf.d/aurora-*.conf; do
+    [ -e "$conf" ] || continue
+    migrate_nginx_http2_deprecated_file "$conf"
+  done
+}
+
 install_nginx_reverse_proxy() {
   local app_host proxy_server_name backend_port conf_tmp
   ensure_nginx_installed
@@ -758,6 +749,7 @@ install_nginx_reverse_proxy() {
   render_nginx_template "$NGINX_TEMPLATE_FILE" "$conf_tmp" "$proxy_server_name" "$backend_port"
 
   as_root install -m 0644 -o root -g root "$conf_tmp" "$NGINX_CONF_FILE"
+  migrate_nginx_http2_deprecated_all
   as_root nginx -t
   as_root systemctl daemon-reload
   as_root systemctl enable "$NGINX_SERVICE_NAME"
@@ -819,7 +811,6 @@ main() {
 
   ensure_service_user
   ensure_service_user_sudo_group
-  ensure_admin_ssh_keypair
   ensure_tls_dir
   install_env_file "$INPUT_ENV_FILE"
   assign_random_backend_port
