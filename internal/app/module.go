@@ -146,10 +146,11 @@ func NewModules(
 		cfg.AgentMTLS.CAKey,
 	)
 	if err := runtimeSvc.SeedControlPlaneTrustStore(ctx, apisvc.ControlPlaneTrustSeedInput{
-		AdminCACertPath:          cfg.App.TLSCA,
-		AdminServerCertPath:      cfg.App.TLSCert,
-		AgentCACertPath:          cfg.AgentMTLS.CACert,
-		AgentAdminClientCertPath: cfg.AgentMTLS.AdminClientCert,
+		AdminCACertPath:           cfg.App.TLSCA,
+		AdminServerCertPath:       cfg.App.TLSCert,
+		AgentCACertPath:           cfg.AgentMTLS.CACert,
+		AgentSharedClientCertPath: cfg.AgentMTLS.AdminClientCert,
+		AgentSharedClientKeyPath:  cfg.AgentMTLS.AdminClientKey,
 	}); err != nil {
 		_ = etcdClient.Close()
 		_ = redisClient.Close()

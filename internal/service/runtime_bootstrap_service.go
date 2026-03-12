@@ -14,7 +14,11 @@ type RuntimeBootstrapRequest struct {
 
 type AgentHeartbeatInput struct {
 	AgentID           string
+	ServiceID         string
+	Role              string
+	ClusterID         string
 	Hostname          string
+	AgentIP           string
 	AgentVersion      string
 	AgentProbeAddr    string
 	AgentGRPCEndpoint string
@@ -32,6 +36,8 @@ type AgentPeerInfo struct {
 type AgentBootstrapRequest struct {
 	NodeID            string
 	ClusterID         string
+	ServiceID         string
+	Role              string
 	Hostname          string
 	IPAddress         string
 	BootstrapToken    string
@@ -46,6 +52,17 @@ type AgentBootstrapResult struct {
 	CACertPEM     string
 	SerialHex     string
 	ExpiresAt     time.Time
+}
+
+type AgentIdentityClaims struct {
+	NodeID    string
+	ServiceID string
+	Role      string
+	ClusterID string
+}
+
+type AgentRenewRequest struct {
+	CSRPEM string
 }
 
 type AgentBootstrapTokenResult struct {
@@ -64,8 +81,8 @@ type RuntimeBootstrapService struct {
 	endpointRepo    repository.EndpointRepository
 	certStoreRepo   repository.CertStoreRepository
 	certStorePrefix string
-	caCertPath      string
-	caKeyPath       string
+	agentCACertPath string
+	agentCAKeyPath  string
 	agentCertTTL    time.Duration
 }
 
@@ -79,16 +96,16 @@ func NewRuntimeBootstrapService(
 	endpointRepo repository.EndpointRepository,
 	certStoreRepo repository.CertStoreRepository,
 	certStorePrefix string,
-	caCertPath string,
-	caKeyPath string,
+	agentCACertPath string,
+	agentCAKeyPath string,
 ) *RuntimeBootstrapService {
 	return &RuntimeBootstrapService{
 		runtimeRepo:     runtimeRepo,
 		endpointRepo:    endpointRepo,
 		certStoreRepo:   certStoreRepo,
 		certStorePrefix: strings.TrimSpace(certStorePrefix),
-		caCertPath:      strings.TrimSpace(caCertPath),
-		caKeyPath:       strings.TrimSpace(caKeyPath),
-		agentCertTTL:    365 * 24 * time.Hour,
+		agentCACertPath: strings.TrimSpace(agentCACertPath),
+		agentCAKeyPath:  strings.TrimSpace(agentCAKeyPath),
+		agentCertTTL:    30 * 24 * time.Hour,
 	}
 }

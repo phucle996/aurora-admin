@@ -3,6 +3,7 @@ package moduleinstall
 import (
 	keycfg "admin/internal/key"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"sort"
@@ -18,12 +19,23 @@ type InstallAgent struct {
 
 type installAgentRuntimeDetails struct {
 	InstallAgent
-	Status      string
-	IPAddress   string
-	Host        string
-	peerHost    string
-	peerAddress string
-	probeAddr   string
+	Status string
+	Host   string
+}
+
+type registryAgentPayload struct {
+	AgentID           string `json:"agent_id"`
+	ServiceID         string `json:"service_id"`
+	Role              string `json:"role"`
+	ClusterID         string `json:"cluster_id"`
+	Hostname          string `json:"hostname"`
+	IPAddress         string `json:"ip_address"`
+	AgentVersion      string `json:"agent_version"`
+	AgentProbeAddr    string `json:"agent_probe_addr"`
+	AgentGRPCEndpoint string `json:"agent_grpc_endpoint"`
+	Platform          string `json:"platform"`
+	LibvirtURI        string `json:"libvirt_uri"`
+	SeenAt            string `json:"seen_at"`
 }
 
 func (s *ModuleInstallService) ListInstallAgents(ctx context.Context) ([]InstallAgent, error) {
@@ -55,79 +67,43 @@ func (s *ModuleInstallService) listInstallAgentsRuntime(ctx context.Context) ([]
 		return nil, fmt.Errorf("module install service is nil")
 	}
 
-	kvs, err := s.runtimeRepo.ListByPrefix(ctx, keycfg.RuntimeAgentPrefix)
+	kvs, err := s.runtimeRepo.ListByPrefix(ctx, keycfg.RegistryAgentPrefix)
 	if err != nil {
-		return nil, fmt.Errorf("list runtime agents failed: %w", err)
+		return nil, fmt.Errorf("list registry agents failed: %w", err)
 	}
 
-	type draft struct {
-		installAgentRuntimeDetails
-	}
-
-	drafts := map[string]*draft{}
+	out := make([]installAgentRuntimeDetails, 0, len(kvs))
 	for _, kv := range kvs {
-		agentID, field, ok := parseAgentNodeField(kv.Key)
-		if !ok {
+		agentID := parseRegistryAgentID(kv.Key)
+		if agentID == "" {
 			continue
 		}
-		item, exists := drafts[agentID]
-		if !exists {
-			item = &draft{
-				installAgentRuntimeDetails: installAgentRuntimeDetails{
-					InstallAgent: InstallAgent{
-						AgentID: agentID,
-					},
-				},
-			}
-			drafts[agentID] = item
+		payload, parseErr := parseRegistryAgentPayload(kv.Value)
+		if parseErr != nil {
+			continue
 		}
-		value := strings.TrimSpace(kv.Value)
-		switch field {
-		case "agent_id":
-			if value != "" {
-				item.AgentID = value
-			}
-		case "status":
-			item.Status = value
-		case "hostname":
-			item.Hostname = value
-		case "ip":
-			item.IPAddress = value
-		case "grpc_endpoint":
-			item.AgentGRPCEndpoint = value
-		case "probe_addr":
-			item.probeAddr = value
-		case "last_seen_at":
-			// keep in etcd for future UI extension; currently not exposed in API
-		case "peer/host":
-			item.peerHost = value
-		case "peer/address":
-			item.peerAddress = value
+		if payload.AgentID == "" {
+			payload.AgentID = agentID
 		}
-	}
+		resolvedEndpoint := strings.TrimSpace(payload.AgentGRPCEndpoint)
+		if resolvedEndpoint == "" {
+			resolvedEndpoint = resolveGRPCEndpointFromProbe(payload.IPAddress, payload.AgentProbeAddr)
+		}
+		host := firstNonEmpty(payload.IPAddress, hostFromEndpoint(resolvedEndpoint))
 
-	out := make([]installAgentRuntimeDetails, 0, len(drafts))
-	for _, item := range drafts {
-		item.AgentGRPCEndpoint = firstNonEmpty(
-			item.AgentGRPCEndpoint,
-			resolveGRPCEndpointFromProbe(item.peerHost, item.IPAddress, item.probeAddr),
-		)
-		item.Host = firstNonEmpty(
-			item.peerHost,
-			item.IPAddress,
-			hostFromEndpoint(item.AgentGRPCEndpoint),
-			hostFromAddress(item.peerAddress),
-		)
-		if item.AgentID == "" {
-			continue
-		}
-		out = append(out, item.installAgentRuntimeDetails)
+		out = append(out, installAgentRuntimeDetails{
+			InstallAgent: InstallAgent{
+				AgentID:           payload.AgentID,
+				Status:            "connected",
+				Hostname:          strings.TrimSpace(payload.Hostname),
+				AgentGRPCEndpoint: resolvedEndpoint,
+			},
+			Status: "connected",
+			Host:   host,
+		})
 	}
 
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].Status != out[j].Status {
-			return out[i].Status == "connected"
-		}
 		return out[i].AgentID < out[j].AgentID
 	})
 	return out, nil
@@ -147,39 +123,22 @@ func (s *ModuleInstallService) hydrateInstallTargetFromAgent(
 		return nil
 	}
 
-	keys := []string{
-		keycfg.RuntimeAgentNodeKey(agentID, "agent_id"),
-		keycfg.RuntimeAgentNodeKey(agentID, "status"),
-		keycfg.RuntimeAgentNodeKey(agentID, "hostname"),
-		keycfg.RuntimeAgentNodeKey(agentID, "ip"),
-		keycfg.RuntimeAgentNodeKey(agentID, "probe_addr"),
-		keycfg.RuntimeAgentNodeKey(agentID, "grpc_endpoint"),
-		keycfg.RuntimeAgentNodeKey(agentID, "peer/host"),
-		keycfg.RuntimeAgentNodeKey(agentID, "peer/address"),
-	}
-	values, err := s.runtimeRepo.GetMany(ctx, keys)
+	value, found, err := s.runtimeRepo.Get(ctx, keycfg.RegistryAgentKey(agentID))
 	if err != nil {
-		return fmt.Errorf("load agent runtime keys failed: %w", err)
+		return fmt.Errorf("load registry agent failed: %w", err)
 	}
-	if len(values) == 0 {
-		return fmt.Errorf("agent_id %s not found", agentID)
+	if !found || strings.TrimSpace(value) == "" {
+		return fmt.Errorf("agent_id %s not found or not connected", agentID)
 	}
-
-	status := strings.TrimSpace(values[keycfg.RuntimeAgentNodeKey(agentID, "status")])
-	if status != "" && status != "connected" {
-		return fmt.Errorf("agent_id %s is not connectable (status=%s)", agentID, status)
+	payload, parseErr := parseRegistryAgentPayload(value)
+	if parseErr != nil {
+		return fmt.Errorf("invalid registry payload for agent_id %s: %w", agentID, parseErr)
 	}
-
-	peerHost := strings.TrimSpace(values[keycfg.RuntimeAgentNodeKey(agentID, "peer/host")])
-	ipAddress := strings.TrimSpace(values[keycfg.RuntimeAgentNodeKey(agentID, "ip")])
-	probeAddr := strings.TrimSpace(values[keycfg.RuntimeAgentNodeKey(agentID, "probe_addr")])
-	grpcEndpoint := strings.TrimSpace(values[keycfg.RuntimeAgentNodeKey(agentID, "grpc_endpoint")])
-	peerAddress := strings.TrimSpace(values[keycfg.RuntimeAgentNodeKey(agentID, "peer/address")])
 
 	req.AgentGRPCEndpoint = firstNonEmpty(
 		req.AgentGRPCEndpoint,
-		grpcEndpoint,
-		resolveGRPCEndpointFromProbe(peerHost, ipAddress, probeAddr),
+		strings.TrimSpace(payload.AgentGRPCEndpoint),
+		resolveGRPCEndpointFromProbe(payload.IPAddress, payload.AgentProbeAddr),
 	)
 	if req.AgentGRPCEndpoint == "" {
 		return fmt.Errorf("cannot resolve agent grpc endpoint from agent_id %s", agentID)
@@ -187,10 +146,8 @@ func (s *ModuleInstallService) hydrateInstallTargetFromAgent(
 
 	resolvedHost := firstNonEmpty(
 		normalizeAddress(req.TargetHost),
-		peerHost,
-		ipAddress,
-		hostFromEndpoint(grpcEndpoint),
-		hostFromAddress(peerAddress),
+		strings.TrimSpace(payload.IPAddress),
+		hostFromEndpoint(req.AgentGRPCEndpoint),
 	)
 	if resolvedHost == "" {
 		return fmt.Errorf("cannot resolve target host from agent_id %s", agentID)
@@ -211,28 +168,24 @@ func normalizeInstallAgentID(raw string) string {
 	return strings.Trim(strings.TrimSpace(raw), "/")
 }
 
-func parseAgentNodeField(fullKey string) (agentID string, field string, ok bool) {
-	base := strings.TrimRight(strings.TrimSpace(keycfg.RuntimeAgentPrefix), "/") + "/"
-	key := strings.TrimSpace(fullKey)
-	if !strings.HasPrefix(key, base) {
-		return "", "", false
+func parseRegistryAgentID(key string) string {
+	prefix := strings.TrimRight(strings.TrimSpace(keycfg.RegistryAgentPrefix), "/") + "/"
+	trimmed := strings.TrimSpace(key)
+	if !strings.HasPrefix(trimmed, prefix) {
+		return ""
 	}
+	return normalizeInstallAgentID(strings.TrimPrefix(trimmed, prefix))
+}
 
-	rest := strings.TrimPrefix(key, base)
-	if rest == "" {
-		return "", "", false
+func parseRegistryAgentPayload(raw string) (registryAgentPayload, error) {
+	payload := registryAgentPayload{}
+	if strings.TrimSpace(raw) == "" {
+		return payload, fmt.Errorf("empty registry payload")
 	}
-	parts := strings.SplitN(rest, "/", 2)
-	if len(parts) != 2 {
-		return "", "", false
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &payload); err != nil {
+		return payload, err
 	}
-
-	id := normalizeInstallAgentID(parts[0])
-	suffix := strings.Trim(strings.TrimSpace(parts[1]), "/")
-	if id == "" || suffix == "" {
-		return "", "", false
-	}
-	return id, suffix, true
+	return payload, nil
 }
 
 func firstNonEmpty(values ...string) string {
@@ -256,18 +209,7 @@ func hostFromEndpoint(endpoint string) string {
 	return normalizeAddress(value)
 }
 
-func hostFromAddress(raw string) string {
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return ""
-	}
-	if host, _, err := net.SplitHostPort(value); err == nil {
-		return normalizeAddress(host)
-	}
-	return normalizeAddress(value)
-}
-
-func resolveGRPCEndpointFromProbe(peerHost, ipAddress, probeAddr string) string {
+func resolveGRPCEndpointFromProbe(ipAddress, probeAddr string) string {
 	probe := strings.TrimSpace(probeAddr)
 	if probe == "" {
 		return ""
@@ -276,7 +218,7 @@ func resolveGRPCEndpointFromProbe(peerHost, ipAddress, probeAddr string) string 
 	if splitErr != nil {
 		return ""
 	}
-	host := firstNonEmpty(peerHost, ipAddress)
+	host := strings.TrimSpace(ipAddress)
 	if host == "" {
 		return ""
 	}

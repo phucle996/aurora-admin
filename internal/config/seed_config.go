@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
@@ -88,8 +89,20 @@ func SeedRuntimeToEtcdIfAbsent(ctx context.Context, cli *clientv3.Client, cfg *C
 	if agentBootstrapToken != "" {
 		clusterPolicy := strings.TrimSpace(getEnv("AURORA_AGENT_BOOTSTRAP_CLUSTER", "*"))
 		sum := sha256.Sum256([]byte(agentBootstrapToken))
+		now := time.Now().UTC()
+		record := map[string]any{
+			"token_hash":    hex.EncodeToString(sum[:]),
+			"cluster_scope": clusterPolicy,
+			"issued_at":     now.Format(time.RFC3339Nano),
+			"expires_at":    now.Add(10 * time.Minute).Format(time.RFC3339Nano),
+			"max_use":       1,
+		}
+		recordJSON, marshalErr := json.Marshal(record)
+		if marshalErr != nil {
+			return fmt.Errorf("marshal bootstrap token seed record failed: %w", marshalErr)
+		}
 		tokenKey := keycfg.RuntimeAgentBootstrapTokenKey(hex.EncodeToString(sum[:]))
-		if err := putIfAbsentCAS(ctx, cli, tokenKey, clusterPolicy); err != nil {
+		if err := putIfAbsentCAS(ctx, cli, tokenKey, strings.TrimSpace(string(recordJSON))); err != nil {
 			return fmt.Errorf("seed agent bootstrap token failed: %w", err)
 		}
 	}

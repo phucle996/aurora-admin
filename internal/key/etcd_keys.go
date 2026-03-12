@@ -8,6 +8,7 @@ import (
 const (
 	EndpointPrefix   = "/endpoint"
 	RuntimePrefix    = "/runtime"
+	RegistryPrefix   = "/registry"
 	SharedCORSPrefix = "/shared/cors"
 
 	EndpointAdminKey = "/endpoint/admin"
@@ -22,8 +23,10 @@ const (
 	RuntimeHostsPrefix               = "/runtime/hosts"
 	RuntimeAgentPrefix               = "/runtime/agent/nodes"
 	RuntimeAgentBootstrapTokenPrefix = "/runtime/agent/bootstrap_tokens"
-	RuntimeAgentBootstrapTokenActive = "/runtime/agent/bootstrap_token_active_b64"
+	RuntimeAgentCSRPrefix            = "/runtime/agent/csr_requests"
+	RuntimeAgentAuditPrefix          = "/runtime/agent/audit"
 	RuntimeAgentRevocationPrefix     = "/runtime/agent/revocations"
+	RegistryAgentPrefix              = "/registry/agents"
 
 	APIKeyCurrentVersionPath       = "/apikey/current_version"
 	APIKeyCurrentRotatedAtPath     = "/apikey/current_rotated_at"
@@ -101,6 +104,42 @@ func RuntimeAgentRevocationKey(serialHex string) string {
 		return RuntimeAgentRevocationPrefix
 	}
 	return RuntimeAgentRevocationPrefix + "/" + serial
+}
+
+func RuntimeAgentCSRRequestKey(agentID string, requestID string) string {
+	id := strings.Trim(strings.TrimSpace(agentID), "/")
+	request := strings.Trim(strings.TrimSpace(requestID), "/")
+	base := RuntimeAgentCSRPrefix
+	if id == "" {
+		return base
+	}
+	base = base + "/" + id
+	if request == "" {
+		return base
+	}
+	return base + "/" + request
+}
+
+func RuntimeAgentAuditEventKey(agentID string, eventID string) string {
+	id := strings.Trim(strings.TrimSpace(agentID), "/")
+	event := strings.Trim(strings.TrimSpace(eventID), "/")
+	base := RuntimeAgentAuditPrefix
+	if id == "" {
+		return base
+	}
+	base = base + "/" + id
+	if event == "" {
+		return base
+	}
+	return base + "/" + event
+}
+
+func RegistryAgentKey(agentID string) string {
+	id := strings.Trim(strings.TrimSpace(agentID), "/")
+	if id == "" {
+		return RegistryAgentPrefix
+	}
+	return RegistryAgentPrefix + "/" + id
 }
 
 func RuntimeAgentMetricsPolicyKey(agentID string, suffix string) string {

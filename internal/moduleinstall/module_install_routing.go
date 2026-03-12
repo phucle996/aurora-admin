@@ -120,7 +120,7 @@ func (s *ModuleInstallService) listConnectedAgentInstallTargets(
 			Scope:             ModuleInstallScopeRemote,
 			AgentID:           agentID,
 			AgentGRPCEndpoint: endpoint,
-			Host:              firstNonEmpty(item.Host, item.IPAddress, hostFromEndpoint(endpoint)),
+			Host:              firstNonEmpty(item.Host, hostFromEndpoint(endpoint)),
 		})
 	}
 	return targets, warnings

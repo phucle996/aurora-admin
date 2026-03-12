@@ -506,11 +506,11 @@ EOF
     -out "$agent_client_csr_tmp" \
     -subj "/CN=aurora-admin-agent-client" >/dev/null 2>&1
 
-  cat > "$agent_client_ext_tmp" <<EOF
+cat > "$agent_client_ext_tmp" <<EOF
 basicConstraints=CA:FALSE
 keyUsage = digitalSignature, keyEncipherment
 extendedKeyUsage = clientAuth
-subjectAltName = DNS:aurora-admin-agent-client,DNS:${app_host},DNS:localhost,IP:127.0.0.1
+subjectAltName = DNS:aurora-admin-agent-client,DNS:${app_host},DNS:localhost,IP:127.0.0.1,URI:spiffe://aurora.local/service/aurora-admin,URI:spiffe://aurora.local/role/control-plane,URI:spiffe://aurora.local/node/admin-control-plane
 EOF
 
   openssl x509 -req \

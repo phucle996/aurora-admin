@@ -16,10 +16,11 @@ const (
 )
 
 type ControlPlaneTrustSeedInput struct {
-	AdminCACertPath          string
-	AdminServerCertPath      string
-	AgentCACertPath          string
-	AgentAdminClientCertPath string
+	AdminCACertPath           string
+	AdminServerCertPath       string
+	AgentCACertPath           string
+	AgentSharedClientCertPath string
+	AgentSharedClientKeyPath  string
 }
 
 func (s *RuntimeBootstrapService) SeedControlPlaneTrustStore(
@@ -42,7 +43,11 @@ func (s *RuntimeBootstrapService) SeedControlPlaneTrustStore(
 	if err != nil {
 		return err
 	}
-	adminAgentClientCert, err := readAndValidateCertificatePEMFile(input.AgentAdminClientCertPath, "admin agent client cert")
+	sharedAgentClientCert, err := readAndValidateCertificatePEMFile(input.AgentSharedClientCertPath, "shared agent client cert")
+	if err != nil {
+		return err
+	}
+	sharedAgentClientKey, err := readAndValidatePrivateKeyPEMFile(input.AgentSharedClientKeyPath, "shared agent client key")
 	if err != nil {
 		return err
 	}
@@ -54,7 +59,8 @@ func (s *RuntimeBootstrapService) SeedControlPlaneTrustStore(
 		controlPlaneCertStoreKey(s.certStorePrefix, adminObjectID, agentCertStoreTypeCA):                adminCA,
 		controlPlaneCertStoreKey(s.certStorePrefix, adminObjectID, controlPlaneCertStoreTypeServerCert): adminServerCert,
 		controlPlaneCertStoreKey(s.certStorePrefix, agentObjectID, agentCertStoreTypeCA):                agentCA,
-		controlPlaneCertStoreKey(s.certStorePrefix, agentObjectID, agentCertStoreTypeClientCert):        adminAgentClientCert,
+		controlPlaneCertStoreKey(s.certStorePrefix, agentObjectID, agentCertStoreTypeClientCert):        sharedAgentClientCert,
+		controlPlaneCertStoreKey(s.certStorePrefix, agentObjectID, "private_client"):                    sharedAgentClientKey,
 	}
 
 	for key, value := range values {
@@ -99,6 +105,46 @@ func readAndValidateCertificatePEMFile(path string, label string) (string, error
 	if err := validateCertificatePEM(trimmed); err != nil {
 		return "", fmt.Errorf("%s is invalid pem cert: %w", strings.TrimSpace(label), err)
 	}
+	return trimmed, nil
+}
+
+func readAndValidatePrivateKeyPEMFile(path string, label string) (string, error) {
+	cleanPath := strings.TrimSpace(path)
+	if cleanPath == "" {
+		return "", fmt.Errorf("%s path is empty", strings.TrimSpace(label))
+	}
+
+	raw, err := os.ReadFile(cleanPath)
+	if err != nil {
+		return "", fmt.Errorf("read %s failed: %w", strings.TrimSpace(label), err)
+	}
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return "", fmt.Errorf("%s content is empty", strings.TrimSpace(label))
+	}
+
+	block, _ := pem.Decode([]byte(trimmed))
+	if block == nil {
+		return "", fmt.Errorf("%s is invalid pem key", strings.TrimSpace(label))
+	}
+
+	switch block.Type {
+	case "RSA PRIVATE KEY":
+		if _, parseErr := x509.ParsePKCS1PrivateKey(block.Bytes); parseErr != nil {
+			return "", fmt.Errorf("%s parse rsa key failed: %w", strings.TrimSpace(label), parseErr)
+		}
+	case "EC PRIVATE KEY":
+		if _, parseErr := x509.ParseECPrivateKey(block.Bytes); parseErr != nil {
+			return "", fmt.Errorf("%s parse ec key failed: %w", strings.TrimSpace(label), parseErr)
+		}
+	case "PRIVATE KEY":
+		if _, parseErr := x509.ParsePKCS8PrivateKey(block.Bytes); parseErr != nil {
+			return "", fmt.Errorf("%s parse pkcs8 key failed: %w", strings.TrimSpace(label), parseErr)
+		}
+	default:
+		return "", fmt.Errorf("%s unsupported key type %s", strings.TrimSpace(label), strings.TrimSpace(block.Type))
+	}
+
 	return trimmed, nil
 }
 

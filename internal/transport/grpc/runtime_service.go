@@ -4,6 +4,7 @@ import (
 	"admin/internal/service"
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"strings"
@@ -18,17 +19,21 @@ import (
 )
 
 const (
-	runtimeServiceName            = "admin.transport.runtime.v1.RuntimeService"
-	runtimeGetUMSBootstrapMethod  = "GetUMSBootstrap"
-	runtimeBootstrapAgentMethod   = "BootstrapAgent"
-	runtimeReportAgentMethod      = "ReportAgentHeartbeat"
-	runtimeGetAgentMetricsPolicy  = "GetAgentMetricsPolicy"
-	runtimeReportAgentMetrics     = "ReportAgentMetrics"
-	runtimeGetUMSBootstrapPath    = "/" + runtimeServiceName + "/" + runtimeGetUMSBootstrapMethod
-	runtimeBootstrapAgentPath     = "/" + runtimeServiceName + "/" + runtimeBootstrapAgentMethod
-	runtimeReportAgentPath        = "/" + runtimeServiceName + "/" + runtimeReportAgentMethod
-	runtimeGetAgentPolicyPath     = "/" + runtimeServiceName + "/" + runtimeGetAgentMetricsPolicy
-	runtimeReportAgentMetricsPath = "/" + runtimeServiceName + "/" + runtimeReportAgentMetrics
+	runtimeServiceName               = "admin.transport.runtime.v1.RuntimeService"
+	runtimeGetRuntimeBootstrapMethod = "GetRuntimeBootstrap"
+	runtimeGetUMSBootstrapMethod     = "GetUMSBootstrap"
+	runtimeBootstrapAgentMethod      = "BootstrapAgent"
+	runtimeRenewAgentCertMethod      = "RenewAgentCertificate"
+	runtimeReportAgentMethod         = "ReportAgentHeartbeat"
+	runtimeGetAgentMetricsPolicy     = "GetAgentMetricsPolicy"
+	runtimeReportAgentMetrics        = "ReportAgentMetrics"
+	runtimeGetRuntimeBootstrapPath   = "/" + runtimeServiceName + "/" + runtimeGetRuntimeBootstrapMethod
+	runtimeGetUMSBootstrapPath       = "/" + runtimeServiceName + "/" + runtimeGetUMSBootstrapMethod
+	runtimeBootstrapAgentPath        = "/" + runtimeServiceName + "/" + runtimeBootstrapAgentMethod
+	runtimeRenewAgentCertPath        = "/" + runtimeServiceName + "/" + runtimeRenewAgentCertMethod
+	runtimeReportAgentPath           = "/" + runtimeServiceName + "/" + runtimeReportAgentMethod
+	runtimeGetAgentPolicyPath        = "/" + runtimeServiceName + "/" + runtimeGetAgentMetricsPolicy
+	runtimeReportAgentMetricsPath    = "/" + runtimeServiceName + "/" + runtimeReportAgentMetrics
 )
 
 type RuntimeTransportService struct {
@@ -36,8 +41,10 @@ type RuntimeTransportService struct {
 }
 
 type runtimeTransportServer interface {
+	GetRuntimeBootstrap(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	GetUMSBootstrap(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	BootstrapAgent(context.Context, *structpb.Struct) (*structpb.Struct, error)
+	RenewAgentCertificate(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	ReportAgentHeartbeat(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	GetAgentMetricsPolicy(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	ReportAgentMetrics(context.Context, *structpb.Struct) (*structpb.Struct, error)
@@ -47,7 +54,7 @@ func NewRuntimeTransportService(runtimeSvc *service.RuntimeBootstrapService) *Ru
 	return &RuntimeTransportService{runtimeSvc: runtimeSvc}
 }
 
-func (s *RuntimeTransportService) GetUMSBootstrap(
+func (s *RuntimeTransportService) GetRuntimeBootstrap(
 	ctx context.Context,
 	req *structpb.Struct,
 ) (*structpb.Struct, error) {
@@ -88,6 +95,14 @@ func (s *RuntimeTransportService) GetUMSBootstrap(
 	return res, nil
 }
 
+// GetUMSBootstrap is kept as backward-compatible alias.
+func (s *RuntimeTransportService) GetUMSBootstrap(
+	ctx context.Context,
+	req *structpb.Struct,
+) (*structpb.Struct, error) {
+	return s.GetRuntimeBootstrap(ctx, req)
+}
+
 func (s *RuntimeTransportService) BootstrapAgent(
 	ctx context.Context,
 	req *structpb.Struct,
@@ -99,6 +114,8 @@ func (s *RuntimeTransportService) BootstrapAgent(
 	result, err := s.runtimeSvc.BootstrapAgent(ctx, service.AgentBootstrapRequest{
 		NodeID:            readStructString(req, "node_id"),
 		ClusterID:         readStructString(req, "cluster_id"),
+		ServiceID:         readStructString(req, "service_id"),
+		Role:              readStructString(req, "role"),
 		Hostname:          readStructString(req, "hostname"),
 		IPAddress:         readStructString(req, "ip"),
 		BootstrapToken:    readStructString(req, "bootstrap_token"),
@@ -131,6 +148,56 @@ func (s *RuntimeTransportService) BootstrapAgent(
 	return res, nil
 }
 
+func (s *RuntimeTransportService) RenewAgentCertificate(
+	ctx context.Context,
+	req *structpb.Struct,
+) (*structpb.Struct, error) {
+	if s == nil || s.runtimeSvc == nil {
+		return nil, status.Error(codes.Unavailable, "runtime bootstrap service unavailable")
+	}
+	_, peerInfo, certErr := extractClientPeerDetails(ctx)
+	if certErr != nil {
+		return nil, status.Error(codes.Unauthenticated, certErr.Error())
+	}
+	if err := validateAgentPeerClaims(peerInfo.Claims); err != nil {
+		return nil, status.Error(codes.PermissionDenied, err.Error())
+	}
+	if err := authorizeAgentRole(runtimeRenewAgentCertPath, peerInfo.Claims.Role); err != nil {
+		return nil, status.Error(codes.PermissionDenied, err.Error())
+	}
+	revoked, revokedErr := s.runtimeSvc.IsAgentCertificateRevoked(ctx, peerInfo.CertSerialHex)
+	if revokedErr != nil {
+		return nil, status.Error(codes.Internal, "failed to verify certificate status")
+	}
+	if revoked {
+		return nil, status.Error(codes.PermissionDenied, "certificate revoked")
+	}
+
+	result, renewErr := s.runtimeSvc.RenewAgentCertificate(ctx, service.AgentRenewRequest{
+		CSRPEM: readStructString(req, "csr_pem"),
+	}, peerInfo.Claims, readStructString(req, "hostname"), readStructString(req, "ip"))
+	if renewErr != nil {
+		switch {
+		case errors.Is(renewErr, service.ErrAgentCSRInvalid):
+			return nil, status.Error(codes.InvalidArgument, "invalid csr")
+		default:
+			return nil, status.Error(codes.Internal, "renew agent certificate failed")
+		}
+	}
+
+	res, encodeErr := structpb.NewStruct(map[string]any{
+		"ok":              true,
+		"client_cert_pem": result.ClientCertPEM,
+		"ca_cert_pem":     result.CACertPEM,
+		"serial_hex":      result.SerialHex,
+		"expires_at":      result.ExpiresAt.UTC().Format(time.RFC3339Nano),
+	})
+	if encodeErr != nil {
+		return nil, status.Error(codes.Internal, "failed to build grpc response payload")
+	}
+	return res, nil
+}
+
 func (s *RuntimeTransportService) ReportAgentHeartbeat(
 	ctx context.Context,
 	req *structpb.Struct,
@@ -143,11 +210,21 @@ func (s *RuntimeTransportService) ReportAgentHeartbeat(
 	if certErr != nil {
 		return nil, status.Error(codes.Unauthenticated, certErr.Error())
 	}
+	if err := validateAgentPeerClaims(peerInfo.Claims); err != nil {
+		return nil, status.Error(codes.PermissionDenied, err.Error())
+	}
 	_ = certDER
+	if err := authorizeAgentRole(runtimeReportAgentPath, peerInfo.Claims.Role); err != nil {
+		return nil, status.Error(codes.PermissionDenied, err.Error())
+	}
 
 	input := service.AgentHeartbeatInput{
 		AgentID:           readStructString(req, "agent_id"),
+		ServiceID:         strings.TrimSpace(peerInfo.Claims.ServiceID),
+		Role:              strings.TrimSpace(peerInfo.Claims.Role),
+		ClusterID:         strings.TrimSpace(peerInfo.Claims.ClusterID),
 		Hostname:          readStructString(req, "hostname"),
+		AgentIP:           readStructString(req, "ip"),
 		AgentVersion:      readStructString(req, "agent_version"),
 		AgentProbeAddr:    readStructString(req, "agent_probe_addr"),
 		AgentGRPCEndpoint: readStructString(req, "agent_grpc_endpoint"),
@@ -157,7 +234,7 @@ func (s *RuntimeTransportService) ReportAgentHeartbeat(
 	if strings.TrimSpace(input.AgentID) == "" {
 		return nil, status.Error(codes.InvalidArgument, "agent_id is required")
 	}
-	if err := validateAgentIdentityFromPeer(input.AgentID, peerInfo); err != nil {
+	if err := validateAgentIdentityFromPeer(input.AgentID, peerInfo.Claims); err != nil {
 		return nil, status.Error(codes.PermissionDenied, err.Error())
 	}
 	revoked, revokedErr := s.runtimeSvc.IsAgentCertificateRevoked(ctx, peerInfo.CertSerialHex)
@@ -199,11 +276,17 @@ func (s *RuntimeTransportService) GetAgentMetricsPolicy(
 	if certErr != nil {
 		return nil, status.Error(codes.Unauthenticated, certErr.Error())
 	}
+	if err := validateAgentPeerClaims(peerInfo.Claims); err != nil {
+		return nil, status.Error(codes.PermissionDenied, err.Error())
+	}
+	if err := authorizeAgentRole(runtimeGetAgentPolicyPath, peerInfo.Claims.Role); err != nil {
+		return nil, status.Error(codes.PermissionDenied, err.Error())
+	}
 	agentID := readStructString(req, "agent_id")
 	if strings.TrimSpace(agentID) == "" {
 		return nil, status.Error(codes.InvalidArgument, "agent_id is required")
 	}
-	if err := validateAgentIdentityFromPeer(agentID, peerInfo); err != nil {
+	if err := validateAgentIdentityFromPeer(agentID, peerInfo.Claims); err != nil {
 		return nil, status.Error(codes.PermissionDenied, err.Error())
 	}
 	revoked, revokedErr := s.runtimeSvc.IsAgentCertificateRevoked(ctx, peerInfo.CertSerialHex)
@@ -242,12 +325,18 @@ func (s *RuntimeTransportService) ReportAgentMetrics(
 	if certErr != nil {
 		return nil, status.Error(codes.Unauthenticated, certErr.Error())
 	}
+	if err := validateAgentPeerClaims(peerInfo.Claims); err != nil {
+		return nil, status.Error(codes.PermissionDenied, err.Error())
+	}
+	if err := authorizeAgentRole(runtimeReportAgentMetricsPath, peerInfo.Claims.Role); err != nil {
+		return nil, status.Error(codes.PermissionDenied, err.Error())
+	}
 
 	agentID := readStructString(req, "agent_id")
 	if strings.TrimSpace(agentID) == "" {
 		return nil, status.Error(codes.InvalidArgument, "agent_id is required")
 	}
-	if err := validateAgentIdentityFromPeer(agentID, peerInfo); err != nil {
+	if err := validateAgentIdentityFromPeer(agentID, peerInfo.Claims); err != nil {
 		return nil, status.Error(codes.PermissionDenied, err.Error())
 	}
 	revoked, revokedErr := s.runtimeSvc.IsAgentCertificateRevoked(ctx, peerInfo.CertSerialHex)
@@ -297,6 +386,7 @@ type runtimePeerInfo struct {
 	CertCommonName string
 	CertSerialHex  string
 	ReceivedAt     string
+	Claims         service.AgentIdentityClaims
 }
 
 func extractClientPeerDetails(ctx context.Context) ([]byte, runtimePeerInfo, error) {
@@ -317,6 +407,7 @@ func extractClientPeerDetails(ctx context.Context) ([]byte, runtimePeerInfo, err
 		remoteAddress = strings.TrimSpace(p.Addr.String())
 	}
 	sum := sha256.Sum256(leaf.Raw)
+	claims := parseAgentClaimsFromPeerCertificate(leaf)
 	return leaf.Raw, runtimePeerInfo{
 		RemoteAddress:  remoteAddress,
 		CertSHA256:     hex.EncodeToString(sum[:]),
@@ -324,6 +415,7 @@ func extractClientPeerDetails(ctx context.Context) ([]byte, runtimePeerInfo, err
 		CertCommonName: strings.TrimSpace(leaf.Subject.CommonName),
 		CertSerialHex:  strings.ToUpper(leaf.SerialNumber.Text(16)),
 		ReceivedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+		Claims:         claims,
 	}, nil
 }
 
@@ -335,24 +427,97 @@ func extractPeerAddress(ctx context.Context) string {
 	return strings.TrimSpace(p.Addr.String())
 }
 
-func validateAgentIdentityFromPeer(agentID string, peer runtimePeerInfo) error {
+func validateAgentIdentityFromPeer(agentID string, claims service.AgentIdentityClaims) error {
 	id := strings.TrimSpace(agentID)
 	if id == "" {
 		return errors.New("agent_id is required")
 	}
-	cn := strings.TrimSpace(peer.CertCommonName)
-	if cn == "" {
-		return nil
-	}
-	if !strings.HasPrefix(cn, "agent:") {
-		return nil
-	}
-	certAgentID := strings.TrimSpace(strings.TrimPrefix(cn, "agent:"))
+	certAgentID := strings.TrimSpace(claims.NodeID)
 	if certAgentID == "" {
-		return errors.New("invalid certificate common name")
+		return errors.New("missing node_id claim in certificate")
 	}
 	if certAgentID != id {
 		return errors.New("agent_id does not match certificate")
+	}
+	return nil
+}
+
+func parseAgentClaimsFromPeerCertificate(cert *x509.Certificate) service.AgentIdentityClaims {
+	claims := service.AgentIdentityClaims{}
+	if cert == nil {
+		return claims
+	}
+	for _, uri := range cert.URIs {
+		if uri == nil || !strings.EqualFold(strings.TrimSpace(uri.Scheme), "spiffe") {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(uri.Host), "aurora.local") {
+			continue
+		}
+		parts := strings.Split(strings.Trim(strings.TrimSpace(uri.Path), "/"), "/")
+		if len(parts) != 2 {
+			continue
+		}
+		kind := strings.ToLower(strings.TrimSpace(parts[0]))
+		value := strings.TrimSpace(parts[1])
+		if value == "" {
+			continue
+		}
+		switch kind {
+		case "node":
+			claims.NodeID = value
+		case "service":
+			claims.ServiceID = value
+		case "role":
+			claims.Role = value
+		case "cluster":
+			claims.ClusterID = value
+		}
+	}
+	return claims
+}
+
+func validateAgentPeerClaims(claims service.AgentIdentityClaims) error {
+	if strings.TrimSpace(claims.NodeID) == "" {
+		return errors.New("missing node_id claim in certificate")
+	}
+	if strings.TrimSpace(claims.ServiceID) == "" {
+		return errors.New("missing service_id claim in certificate")
+	}
+	if strings.TrimSpace(claims.Role) == "" {
+		return errors.New("missing role claim in certificate")
+	}
+	if strings.TrimSpace(claims.ClusterID) == "" {
+		return errors.New("missing cluster_id claim in certificate")
+	}
+	return nil
+}
+
+func authorizeAgentRole(methodPath string, role string) error {
+	requiredRoles := map[string]map[string]struct{}{
+		runtimeReportAgentPath: {
+			"agent": {},
+		},
+		runtimeGetAgentPolicyPath: {
+			"agent": {},
+		},
+		runtimeReportAgentMetricsPath: {
+			"agent": {},
+		},
+		runtimeRenewAgentCertPath: {
+			"agent": {},
+		},
+	}
+	role = strings.TrimSpace(strings.ToLower(role))
+	if role == "" {
+		return errors.New("missing role claim in certificate")
+	}
+	allowed, ok := requiredRoles[methodPath]
+	if !ok {
+		return errors.New("method is not authorized for agent role")
+	}
+	if _, exists := allowed[role]; !exists {
+		return errors.New("role is not allowed for method")
 	}
 	return nil
 }
@@ -482,12 +647,20 @@ func RegisterRuntimeTransportServer(server *gogrpc.Server, svc *RuntimeTransport
 		HandlerType: (*runtimeTransportServer)(nil),
 		Methods: []gogrpc.MethodDesc{
 			{
+				MethodName: runtimeGetRuntimeBootstrapMethod,
+				Handler:    runtimeGetRuntimeBootstrapHandler,
+			},
+			{
 				MethodName: runtimeGetUMSBootstrapMethod,
 				Handler:    runtimeGetUMSBootstrapHandler,
 			},
 			{
 				MethodName: runtimeBootstrapAgentMethod,
 				Handler:    runtimeBootstrapAgentHandler,
+			},
+			{
+				MethodName: runtimeRenewAgentCertMethod,
+				Handler:    runtimeRenewAgentCertHandler,
 			},
 			{
 				MethodName: runtimeReportAgentMethod,
@@ -555,6 +728,32 @@ func runtimeBootstrapAgentHandler(
 	}
 	handler := func(currentCtx context.Context, req interface{}) (interface{}, error) {
 		return base.BootstrapAgent(currentCtx, req.(*structpb.Struct))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func runtimeRenewAgentCertHandler(
+	srv interface{},
+	ctx context.Context,
+	dec func(interface{}) error,
+	interceptor gogrpc.UnaryServerInterceptor,
+) (interface{}, error) {
+	in := &structpb.Struct{}
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+
+	base := srv.(*RuntimeTransportService)
+	if interceptor == nil {
+		return base.RenewAgentCertificate(ctx, in)
+	}
+
+	info := &gogrpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: runtimeRenewAgentCertPath,
+	}
+	handler := func(currentCtx context.Context, req interface{}) (interface{}, error) {
+		return base.RenewAgentCertificate(currentCtx, req.(*structpb.Struct))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -633,6 +832,32 @@ func runtimeGetUMSBootstrapHandler(
 	}
 	handler := func(currentCtx context.Context, req interface{}) (interface{}, error) {
 		return base.GetUMSBootstrap(currentCtx, req.(*structpb.Struct))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func runtimeGetRuntimeBootstrapHandler(
+	srv interface{},
+	ctx context.Context,
+	dec func(interface{}) error,
+	interceptor gogrpc.UnaryServerInterceptor,
+) (interface{}, error) {
+	in := &structpb.Struct{}
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+
+	base := srv.(*RuntimeTransportService)
+	if interceptor == nil {
+		return base.GetRuntimeBootstrap(ctx, in)
+	}
+
+	info := &gogrpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: runtimeGetRuntimeBootstrapPath,
+	}
+	handler := func(currentCtx context.Context, req interface{}) (interface{}, error) {
+		return base.GetRuntimeBootstrap(currentCtx, req.(*structpb.Struct))
 	}
 	return interceptor(ctx, in, info, handler)
 }
