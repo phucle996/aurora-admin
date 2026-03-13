@@ -9,7 +9,6 @@ const (
 	EndpointPrefix   = "/endpoint"
 	RuntimePrefix    = "/runtime"
 	RegistryPrefix   = "/registry"
-	SharedCORSPrefix = "/shared/cors"
 
 	EndpointAdminKey = "/endpoint/admin"
 
@@ -150,17 +149,6 @@ func RuntimeAgentMetricsDataKey(agentID string, suffix string) string {
 	return RuntimeAgentNodeKey(agentID, "metrics/data/"+strings.Trim(strings.TrimSpace(suffix), "/"))
 }
 
-func SharedCORSStoreKey(key string) string {
-	trimmed := strings.TrimSpace(key)
-	if trimmed == "" {
-		return SharedCORSPrefix
-	}
-	if strings.HasPrefix(trimmed, SharedCORSPrefix+"/") || trimmed == SharedCORSPrefix {
-		return trimmed
-	}
-	return SharedCORSPrefix + "/" + strings.Trim(trimmed, "/")
-}
-
 func APIKeyCurrentVersionKey(prefix string) string {
 	base := strings.TrimRight(strings.TrimSpace(prefix), "/")
 	if base == "" {
@@ -280,13 +268,4 @@ const (
 	RTSecretPollEvery    = "/runtime/token_secret/poll_interval"
 
 	RTPlatformKubeconfigCipherKey = "/runtime/platform/kubeconfig_cipher_key"
-)
-
-const (
-	SharedCORSAllowOrigins = "/shared/cors/allow_origins"
-	SharedCORSAllowMethods = "/shared/cors/allow_methods"
-	SharedCORSAllowHeaders = "/shared/cors/allow_headers"
-	SharedCORSExposeHeader = "/shared/cors/expose_headers"
-	SharedCORSAllowCreds   = "/shared/cors/allow_credentials"
-	SharedCORSMaxAge       = "/shared/cors/max_age"
 )

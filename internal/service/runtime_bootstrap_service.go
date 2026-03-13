@@ -42,16 +42,20 @@ type AgentBootstrapRequest struct {
 	IPAddress         string
 	BootstrapToken    string
 	CSRPEM            string
+	ServerCSRPEM      string
 	AgentProbeAddr    string
 	AgentGRPCEndpoint string
 	Platform          string
 }
 
 type AgentBootstrapResult struct {
-	ClientCertPEM string
-	CACertPEM     string
-	SerialHex     string
-	ExpiresAt     time.Time
+	ClientCertPEM    string
+	ServerCertPEM    string
+	AdminServerCAPEM string
+	ClientSerialHex  string
+	ServerSerialHex  string
+	ClientExpiresAt  time.Time
+	ServerExpiresAt  time.Time
 }
 
 type AgentIdentityClaims struct {
@@ -62,7 +66,8 @@ type AgentIdentityClaims struct {
 }
 
 type AgentRenewRequest struct {
-	CSRPEM string
+	CSRPEM       string
+	ServerCSRPEM string
 }
 
 type AgentBootstrapTokenResult struct {
@@ -81,6 +86,7 @@ type RuntimeBootstrapService struct {
 	endpointRepo    repository.EndpointRepository
 	certStoreRepo   repository.CertStoreRepository
 	certStorePrefix string
+	adminCACertPath string
 	agentCACertPath string
 	agentCAKeyPath  string
 	agentCertTTL    time.Duration
@@ -96,6 +102,7 @@ func NewRuntimeBootstrapService(
 	endpointRepo repository.EndpointRepository,
 	certStoreRepo repository.CertStoreRepository,
 	certStorePrefix string,
+	adminCACertPath string,
 	agentCACertPath string,
 	agentCAKeyPath string,
 ) *RuntimeBootstrapService {
@@ -104,6 +111,7 @@ func NewRuntimeBootstrapService(
 		endpointRepo:    endpointRepo,
 		certStoreRepo:   certStoreRepo,
 		certStorePrefix: strings.TrimSpace(certStorePrefix),
+		adminCACertPath: strings.TrimSpace(adminCACertPath),
 		agentCACertPath: strings.TrimSpace(agentCACertPath),
 		agentCAKeyPath:  strings.TrimSpace(agentCAKeyPath),
 		agentCertTTL:    30 * 24 * time.Hour,

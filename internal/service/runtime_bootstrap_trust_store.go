@@ -20,7 +20,6 @@ type ControlPlaneTrustSeedInput struct {
 	AdminServerCertPath       string
 	AgentCACertPath           string
 	AgentSharedClientCertPath string
-	AgentSharedClientKeyPath  string
 }
 
 func (s *RuntimeBootstrapService) SeedControlPlaneTrustStore(
@@ -47,11 +46,6 @@ func (s *RuntimeBootstrapService) SeedControlPlaneTrustStore(
 	if err != nil {
 		return err
 	}
-	sharedAgentClientKey, err := readAndValidatePrivateKeyPEMFile(input.AgentSharedClientKeyPath, "shared agent client key")
-	if err != nil {
-		return err
-	}
-
 	adminObjectID := controlPlaneCertStoreObjectID("admin")
 	agentObjectID := controlPlaneCertStoreObjectID("agent")
 
@@ -60,7 +54,6 @@ func (s *RuntimeBootstrapService) SeedControlPlaneTrustStore(
 		controlPlaneCertStoreKey(s.certStorePrefix, adminObjectID, controlPlaneCertStoreTypeServerCert): adminServerCert,
 		controlPlaneCertStoreKey(s.certStorePrefix, agentObjectID, agentCertStoreTypeCA):                agentCA,
 		controlPlaneCertStoreKey(s.certStorePrefix, agentObjectID, agentCertStoreTypeClientCert):        sharedAgentClientCert,
-		controlPlaneCertStoreKey(s.certStorePrefix, agentObjectID, "private_client"):                    sharedAgentClientKey,
 	}
 
 	for key, value := range values {

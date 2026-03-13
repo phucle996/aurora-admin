@@ -93,12 +93,6 @@ func (s *RuntimeBootstrapService) BuildRuntimeValues(
 		values[dep.BaseURLOutput] = baseURL
 		values[dep.GRPCOutput] = toGRPCEndpoint(baseURL)
 	}
-	values["cors/allow_origins"] = `["https://localhost:80","https://localhost:443"]`
-	values["cors/allow_methods"] = `["GET","POST","PUT","PATCH","DELETE","HEAD","OPTIONS"]`
-	values["cors/allow_headers"] = `["Origin","Content-Type","Accept","Authorization"]`
-	values["cors/expose_headers"] = "[]"
-	values["cors/allow_credentials"] = "true"
-	values["cors/max_age"] = "12h"
 
 	return values, nil
 }

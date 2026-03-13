@@ -120,6 +120,7 @@ func (s *RuntimeTransportService) BootstrapAgent(
 		IPAddress:         readStructString(req, "ip"),
 		BootstrapToken:    readStructString(req, "bootstrap_token"),
 		CSRPEM:            readStructString(req, "csr_pem"),
+		ServerCSRPEM:      readStructString(req, "server_csr_pem"),
 		AgentProbeAddr:    readStructString(req, "agent_probe_addr"),
 		AgentGRPCEndpoint: readStructString(req, "agent_grpc_endpoint"),
 		Platform:          readStructString(req, "platform"),
@@ -136,11 +137,15 @@ func (s *RuntimeTransportService) BootstrapAgent(
 	}
 
 	res, encodeErr := structpb.NewStruct(map[string]any{
-		"ok":              true,
-		"client_cert_pem": result.ClientCertPEM,
-		"ca_cert_pem":     result.CACertPEM,
-		"serial_hex":      result.SerialHex,
-		"expires_at":      result.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		"ok":                  true,
+		"client_cert_pem":     result.ClientCertPEM,
+		"server_cert_pem":     result.ServerCertPEM,
+		"admin_server_ca_pem": result.AdminServerCAPEM,
+		"ca_cert_pem":         result.AdminServerCAPEM,
+		"client_serial_hex":   result.ClientSerialHex,
+		"server_serial_hex":   result.ServerSerialHex,
+		"client_expires_at":   result.ClientExpiresAt.UTC().Format(time.RFC3339Nano),
+		"server_expires_at":   result.ServerExpiresAt.UTC().Format(time.RFC3339Nano),
 	})
 	if encodeErr != nil {
 		return nil, status.Error(codes.Internal, "failed to build grpc response payload")
@@ -174,7 +179,8 @@ func (s *RuntimeTransportService) RenewAgentCertificate(
 	}
 
 	result, renewErr := s.runtimeSvc.RenewAgentCertificate(ctx, service.AgentRenewRequest{
-		CSRPEM: readStructString(req, "csr_pem"),
+		CSRPEM:       readStructString(req, "csr_pem"),
+		ServerCSRPEM: readStructString(req, "server_csr_pem"),
 	}, peerInfo.Claims, readStructString(req, "hostname"), readStructString(req, "ip"))
 	if renewErr != nil {
 		switch {
@@ -186,11 +192,15 @@ func (s *RuntimeTransportService) RenewAgentCertificate(
 	}
 
 	res, encodeErr := structpb.NewStruct(map[string]any{
-		"ok":              true,
-		"client_cert_pem": result.ClientCertPEM,
-		"ca_cert_pem":     result.CACertPEM,
-		"serial_hex":      result.SerialHex,
-		"expires_at":      result.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		"ok":                  true,
+		"client_cert_pem":     result.ClientCertPEM,
+		"server_cert_pem":     result.ServerCertPEM,
+		"admin_server_ca_pem": result.AdminServerCAPEM,
+		"ca_cert_pem":         result.AdminServerCAPEM,
+		"client_serial_hex":   result.ClientSerialHex,
+		"server_serial_hex":   result.ServerSerialHex,
+		"client_expires_at":   result.ClientExpiresAt.UTC().Format(time.RFC3339Nano),
+		"server_expires_at":   result.ServerExpiresAt.UTC().Format(time.RFC3339Nano),
 	})
 	if encodeErr != nil {
 		return nil, status.Error(codes.Internal, "failed to build grpc response payload")

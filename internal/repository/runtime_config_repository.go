@@ -22,7 +22,7 @@ type RuntimeConfigRepository interface {
 	KeepAliveLease(ctx context.Context, leaseID clientv3.LeaseID) error
 	RevokeLease(ctx context.Context, leaseID clientv3.LeaseID) error
 	Delete(ctx context.Context, key string) error
-	ConsumeBootstrapTokenTx(ctx context.Context, rawToken string, now time.Time) (*BootstrapTokenConsumeResult, error)
+	ConsumeBootstrapTokenTx(ctx context.Context, rawToken string, expectedCluster string, now time.Time) (*BootstrapTokenConsumeResult, error)
 }
 
 type RuntimeConfigKV struct {
@@ -258,6 +258,7 @@ func (r *EtcdRuntimeConfigRepository) Delete(ctx context.Context, key string) er
 func (r *EtcdRuntimeConfigRepository) ConsumeBootstrapTokenTx(
 	ctx context.Context,
 	rawToken string,
+	expectedCluster string,
 	now time.Time,
 ) (*BootstrapTokenConsumeResult, error) {
 	if r == nil || r.etcd == nil {
@@ -305,6 +306,11 @@ func (r *EtcdRuntimeConfigRepository) ConsumeBootstrapTokenTx(
 	}
 	if record.MaxUse <= 0 {
 		record.MaxUse = 1
+	}
+	clusterScope := strings.TrimSpace(record.ClusterScope)
+	clusterID := strings.TrimSpace(expectedCluster)
+	if clusterScope != "" && clusterScope != "*" && clusterID != "" && clusterScope != clusterID {
+		return nil, nil
 	}
 
 	expiresAt, err := time.Parse(time.RFC3339Nano, record.ExpiresAt)

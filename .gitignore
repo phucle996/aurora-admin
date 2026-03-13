@@ -27,3 +27,4 @@ internal/app/dist/*
 ./tmp
 .env
 ./install/cfg
+./install/install.dev.sh

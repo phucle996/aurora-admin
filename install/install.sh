@@ -29,6 +29,7 @@ TLS_NGINX_CLIENT_KEY_FILE="${TLS_DIR}/nginx-client.key"
 NGINX_SERVICE_NAME="${AURORA_ADMIN_NGINX_SERVICE_NAME:-nginx}"
 NGINX_CONF_FILE="${AURORA_ADMIN_NGINX_CONF_FILE:-/etc/nginx/conf.d/aurora-admin.conf}"
 NGINX_TEMPLATE_FILE="${AURORA_ADMIN_NGINX_TEMPLATE_FILE:-${SCRIPT_DIR}/nginx.conf}"
+NGINX_HELPER_FILE="${AURORA_ADMIN_NGINX_HELPER_FILE:-${SCRIPT_DIR}/nginx_helpers.sh}"
 NGINX_TEMPLATE_URL="${AURORA_ADMIN_NGINX_TEMPLATE_URL:-}"
 NGINX_CACHE_DIR="${AURORA_ADMIN_NGINX_CACHE_DIR:-/var/cache/nginx/aurora-admin}"
 BACKEND_PORT_MIN="${AURORA_ADMIN_BACKEND_PORT_MIN:-20000}"
@@ -40,6 +41,7 @@ MODE="install"
 TMP_DIR=""
 DELETE_INPUT_ENV="true"
 BACKEND_PORT=""
+NGINX_HELPERS_LOADED="false"
 
 log() { printf '[install] %s\n' "$1"; }
 die() { printf '[install][error] %s\n' "$1" >&2; exit 1; }
@@ -291,6 +293,58 @@ ensure_tls_dir() {
   as_root chmod 750 "$TLS_DIR"
 }
 
+install_package() {
+  local pkg="$1"
+  if command -v apt-get >/dev/null 2>&1; then
+    as_root apt-get install -y "$pkg"
+    return
+  fi
+  if command -v dnf >/dev/null 2>&1; then
+    as_root dnf install -y "$pkg"
+    return
+  fi
+  if command -v yum >/dev/null 2>&1; then
+    as_root yum install -y "$pkg"
+    return
+  fi
+  if command -v apk >/dev/null 2>&1; then
+    as_root apk add --no-cache "$pkg"
+    return
+  fi
+  die "cannot install ${pkg} automatically (unsupported package manager)"
+}
+
+load_nginx_helpers() {
+  local release_tag="${1:-}"
+  if [ "$NGINX_HELPERS_LOADED" = "true" ]; then
+    return
+  fi
+
+  local helper_path="$NGINX_HELPER_FILE"
+  if [ ! -s "$helper_path" ]; then
+    [ -n "${TMP_DIR}" ] || TMP_DIR="$(mktemp -d)"
+    helper_path="${TMP_DIR}/nginx_helpers.sh"
+    local helper_url=""
+    if [ -n "$release_tag" ]; then
+      helper_url="https://raw.githubusercontent.com/${REPO}/${release_tag}/install/nginx_helpers.sh"
+      log "download nginx helper from ${helper_url}"
+      if ! download "$helper_url" "$helper_path"; then
+        warn "cannot download nginx helper from release tag, fallback to main"
+        download "https://raw.githubusercontent.com/${REPO}/main/install/nginx_helpers.sh" "$helper_path"
+      fi
+    else
+      helper_url="https://raw.githubusercontent.com/${REPO}/main/install/nginx_helpers.sh"
+      log "download nginx helper from ${helper_url}"
+      download "$helper_url" "$helper_path"
+    fi
+  fi
+
+  [ -s "$helper_path" ] || die "nginx helper script is missing: ${helper_path}"
+  # shellcheck source=/dev/null
+  . "$helper_path"
+  NGINX_HELPERS_LOADED="true"
+}
+
 port_in_use() {
   local port="$1"
   if command -v ss >/dev/null 2>&1; then
@@ -461,90 +515,35 @@ install_tls_materials() {
   nginx_cert_tmp="${TMP_DIR}/nginx-client.crt"
 
   log "generate self-signed tls cert/key/ca (edge + agent mTLS)"
-  openssl genrsa -out "$ca_key_tmp" 4096 >/dev/null 2>&1
-  openssl req -x509 -new -nodes \
-    -key "$ca_key_tmp" \
-    -sha256 \
-    -days 3650 \
-    -out "$ca_tmp" \
-    -subj "/CN=Aurora Admin CA" >/dev/null 2>&1
+  generate_ca_cert "$ca_key_tmp" "$ca_tmp" "/CN=Aurora Admin CA"
+  generate_ca_cert "$agent_ca_key_tmp" "$agent_ca_tmp" "/CN=Aurora Agent mTLS CA"
 
-  openssl genrsa -out "$key_tmp" 2048 >/dev/null 2>&1
-  openssl req -new \
-    -key "$key_tmp" \
-    -out "$csr_tmp" \
-    -subj "/CN=${app_host}" >/dev/null 2>&1
-
-  cat > "$ext_tmp" <<EOF
-basicConstraints=CA:FALSE
+  generate_signed_cert \
+    "$ca_tmp" "$ca_key_tmp" \
+    "/CN=${app_host}" \
+    "$key_tmp" "$csr_tmp" "$ext_tmp" "$cert_tmp" 825 \
+    "basicConstraints=CA:FALSE
 keyUsage = digitalSignature, keyEncipherment
 extendedKeyUsage = serverAuth, clientAuth
-subjectAltName = DNS:${app_host},DNS:localhost,IP:127.0.0.1
-EOF
+subjectAltName = DNS:${app_host},DNS:localhost,IP:127.0.0.1"
 
-  openssl x509 -req \
-    -in "$csr_tmp" \
-    -CA "$ca_tmp" \
-    -CAkey "$ca_key_tmp" \
-    -CAcreateserial \
-    -out "$cert_tmp" \
-    -days 825 \
-    -sha256 \
-    -extfile "$ext_tmp" >/dev/null 2>&1
-
-  openssl genrsa -out "$agent_ca_key_tmp" 4096 >/dev/null 2>&1
-  openssl req -x509 -new -nodes \
-    -key "$agent_ca_key_tmp" \
-    -sha256 \
-    -days 3650 \
-    -out "$agent_ca_tmp" \
-    -subj "/CN=Aurora Agent mTLS CA" >/dev/null 2>&1
-
-  openssl genrsa -out "$agent_client_key_tmp" 2048 >/dev/null 2>&1
-  openssl req -new \
-    -key "$agent_client_key_tmp" \
-    -out "$agent_client_csr_tmp" \
-    -subj "/CN=aurora-admin-agent-client" >/dev/null 2>&1
-
-cat > "$agent_client_ext_tmp" <<EOF
-basicConstraints=CA:FALSE
+  generate_signed_cert \
+    "$agent_ca_tmp" "$agent_ca_key_tmp" \
+    "/CN=aurora-admin-agent-client" \
+    "$agent_client_key_tmp" "$agent_client_csr_tmp" "$agent_client_ext_tmp" "$agent_client_cert_tmp" 825 \
+    "basicConstraints=CA:FALSE
 keyUsage = digitalSignature, keyEncipherment
 extendedKeyUsage = clientAuth
-subjectAltName = DNS:aurora-admin-agent-client,DNS:${app_host},DNS:localhost,IP:127.0.0.1,URI:spiffe://aurora.local/service/aurora-admin,URI:spiffe://aurora.local/role/control-plane,URI:spiffe://aurora.local/node/admin-control-plane
-EOF
+subjectAltName = DNS:aurora-admin-agent-client,DNS:${app_host},DNS:localhost,IP:127.0.0.1,URI:spiffe://aurora.local/service/aurora-admin,URI:spiffe://aurora.local/role/control-plane,URI:spiffe://aurora.local/node/admin-control-plane"
 
-  openssl x509 -req \
-    -in "$agent_client_csr_tmp" \
-    -CA "$agent_ca_tmp" \
-    -CAkey "$agent_ca_key_tmp" \
-    -CAcreateserial \
-    -out "$agent_client_cert_tmp" \
-    -days 825 \
-    -sha256 \
-    -extfile "$agent_client_ext_tmp" >/dev/null 2>&1
-
-  openssl genrsa -out "$nginx_key_tmp" 2048 >/dev/null 2>&1
-  openssl req -new \
-    -key "$nginx_key_tmp" \
-    -out "$nginx_csr_tmp" \
-    -subj "/CN=aurora-nginx" >/dev/null 2>&1
-
-  cat > "$nginx_ext_tmp" <<EOF
-basicConstraints=CA:FALSE
+  generate_signed_cert \
+    "$ca_tmp" "$ca_key_tmp" \
+    "/CN=aurora-nginx" \
+    "$nginx_key_tmp" "$nginx_csr_tmp" "$nginx_ext_tmp" "$nginx_cert_tmp" 825 \
+    "basicConstraints=CA:FALSE
 keyUsage = digitalSignature, keyEncipherment
 extendedKeyUsage = clientAuth
-subjectAltName = DNS:aurora-nginx,DNS:localhost,IP:127.0.0.1
-EOF
-
-  openssl x509 -req \
-    -in "$nginx_csr_tmp" \
-    -CA "$ca_tmp" \
-    -CAkey "$ca_key_tmp" \
-    -CAcreateserial \
-    -out "$nginx_cert_tmp" \
-    -days 825 \
-    -sha256 \
-    -extfile "$nginx_ext_tmp" >/dev/null 2>&1
+subjectAltName = DNS:aurora-nginx,DNS:localhost,IP:127.0.0.1"
 
   as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$cert_tmp" "$TLS_CERT_FILE"
   as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$key_tmp" "$TLS_KEY_FILE"
@@ -556,6 +555,37 @@ EOF
   as_root install -m 0400 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$agent_client_key_tmp" "$AGENT_TLS_ADMIN_CLIENT_KEY_FILE"
   as_root install -m 0444 -o root -g root "$nginx_cert_tmp" "$TLS_NGINX_CLIENT_CERT_FILE"
   as_root install -m 0400 -o root -g root "$nginx_key_tmp" "$TLS_NGINX_CLIENT_KEY_FILE"
+}
+
+generate_ca_cert() {
+  local ca_key="$1" ca_cert="$2" subject="$3"
+  openssl genrsa -out "$ca_key" 4096 >/dev/null 2>&1
+  openssl req -x509 -new -nodes \
+    -key "$ca_key" \
+    -sha256 \
+    -days 3650 \
+    -out "$ca_cert" \
+    -subj "$subject" >/dev/null 2>&1
+}
+
+generate_signed_cert() {
+  local ca_cert="$1" ca_key="$2" subject="$3" key_file="$4" csr_file="$5" ext_file="$6" cert_file="$7" days="$8" ext_content="$9"
+
+  openssl genrsa -out "$key_file" 2048 >/dev/null 2>&1
+  openssl req -new \
+    -key "$key_file" \
+    -out "$csr_file" \
+    -subj "$subject" >/dev/null 2>&1
+  printf '%s\n' "$ext_content" > "$ext_file"
+  openssl x509 -req \
+    -in "$csr_file" \
+    -CA "$ca_cert" \
+    -CAkey "$ca_key" \
+    -CAcreateserial \
+    -out "$cert_file" \
+    -days "$days" \
+    -sha256 \
+    -extfile "$ext_file" >/dev/null 2>&1
 }
 
 preflight_tls_materials() {
@@ -597,207 +627,7 @@ ensure_nginx_installed() {
   fi
 
   log "install nginx"
-  if command -v apt-get >/dev/null 2>&1; then
-    as_root apt-get install -y nginx
-    return
-  fi
-  if command -v dnf >/dev/null 2>&1; then
-    as_root dnf install -y nginx
-    return
-  fi
-  if command -v yum >/dev/null 2>&1; then
-    as_root yum install -y nginx
-    return
-  fi
-  if command -v apk >/dev/null 2>&1; then
-    as_root apk add --no-cache nginx
-    return
-  fi
-
-  die "cannot install nginx automatically (unsupported package manager)"
-}
-
-ensure_nginx_cache_dir() {
-  local nginx_user
-  nginx_user="$(as_root awk '/^[[:space:]]*user[[:space:]]+/ {gsub(/;/,"",$2); print $2; exit}' /etc/nginx/nginx.conf 2>/dev/null || true)"
-  if [ -z "$nginx_user" ]; then
-    nginx_user="www-data"
-  fi
-
-  as_root mkdir -p "$NGINX_CACHE_DIR"
-  as_root chown -R "${nginx_user}:${nginx_user}" "$NGINX_CACHE_DIR" || as_root chown -R "${nginx_user}" "$NGINX_CACHE_DIR"
-  as_root chmod 750 "$NGINX_CACHE_DIR" || true
-}
-
-nginx_supports_brotli() {
-  if as_root nginx -V 2>&1 | grep -qi "brotli"; then
-    return 0
-  fi
-  if as_root sh -lc 'ls /etc/nginx/modules-enabled/*brotli*.conf >/dev/null 2>&1'; then
-    return 0
-  fi
-  if as_root sh -lc 'ls /usr/lib/nginx/modules/*brotli*.so >/dev/null 2>&1'; then
-    return 0
-  fi
-  return 1
-}
-
-render_nginx_template() {
-  local src="$1"
-  local dst="$2"
-  local app_host="$3"
-  local backend_port="$4"
-  local brotli_enabled="0"
-
-  if nginx_supports_brotli; then
-    sed '/^## __BROTLI_BEGIN__$/d; /^## __BROTLI_END__$/d' "$src" > "$dst"
-    log "nginx brotli: enabled"
-    brotli_enabled="1"
-  else
-    sed '/^## __BROTLI_BEGIN__$/,/^## __BROTLI_END__$/d' "$src" > "$dst"
-    log "nginx brotli: not available, fallback to gzip"
-  fi
-
-  sed -i \
-    -e "s|__SERVER_NAME__|${app_host}|g" \
-    -e "s|__BACKEND_PORT__|${backend_port}|g" \
-    -e "s|__TLS_CERT_FILE__|${TLS_CERT_FILE}|g" \
-    -e "s|__TLS_KEY_FILE__|${TLS_KEY_FILE}|g" \
-    -e "s|__TLS_CA_FILE__|${TLS_CA_FILE}|g" \
-    -e "s|__TLS_NGINX_CLIENT_CERT_FILE__|${TLS_NGINX_CLIENT_CERT_FILE}|g" \
-    -e "s|__TLS_NGINX_CLIENT_KEY_FILE__|${TLS_NGINX_CLIENT_KEY_FILE}|g" \
-    -e "s|__NGINX_CACHE_DIR__|${NGINX_CACHE_DIR}|g" \
-    "$dst"
-
-  normalize_nginx_compression "$dst" "$brotli_enabled"
-}
-
-normalize_nginx_compression() {
-  local file="$1"
-  local brotli_enabled="$2"
-  local tmp_file="${TMP_DIR}/aurora-admin-nginx.normalized.conf"
-
-  awk -v brotli="$brotli_enabled" '
-    BEGIN {
-      seen_server = 0
-      skip_global_types = 0
-      injected = 0
-    }
-    {
-      line = $0
-
-      if (line ~ /^[[:space:]]*server[[:space:]]*\{/) {
-        seen_server = 1
-      }
-
-      if (!seen_server) {
-        if (skip_global_types) {
-          if (line ~ /;/) {
-            skip_global_types = 0
-          }
-          next
-        }
-        if (line ~ /^[[:space:]]*(brotli_types|gzip_types)[[:space:]]*$/ || line ~ /^[[:space:]]*(brotli_types|gzip_types)[[:space:]]+/) {
-          if (line !~ /;/) {
-            skip_global_types = 1
-          }
-          next
-        }
-        if (line ~ /^[[:space:]]*(brotli(_[a-z_]+)?|gzip(_[a-z_]+)?)[[:space:]]+/) {
-          next
-        }
-      }
-
-      print line
-
-      if (!injected && line ~ /^[[:space:]]*ssl_prefer_server_ciphers[[:space:]]+off;/) {
-        print ""
-        if (brotli == "1") {
-          print "  brotli on;"
-          print "  brotli_static on;"
-          print "  brotli_comp_level 5;"
-          print "  brotli_min_length 512;"
-          print "  brotli_types text/plain text/css text/xml text/javascript application/javascript application/x-javascript application/json application/xml application/rss+xml application/wasm image/svg+xml;"
-        }
-        print "  gzip on;"
-        print "  gzip_vary on;"
-        print "  gzip_comp_level 5;"
-        print "  gzip_min_length 512;"
-        print "  gzip_proxied any;"
-        print "  gzip_types text/plain text/css text/xml text/javascript application/javascript application/x-javascript application/json application/xml application/rss+xml application/wasm image/svg+xml;"
-        injected = 1
-      }
-    }
-  ' "$file" > "$tmp_file"
-
-  mv "$tmp_file" "$file"
-}
-
-migrate_nginx_http2_deprecated_file() {
-  local file="$1"
-  [ -f "$file" ] || return 0
-
-  local tmp_file="${TMP_DIR}/$(basename "$file").http2fix"
-  awk '
-    BEGIN {
-      in_server = 0
-      depth = 0
-      has_http2 = 0
-      needs_http2 = 0
-    }
-    {
-      line = $0
-      if (!in_server && line ~ /^[[:space:]]*server[[:space:]]*\{[[:space:]]*$/) {
-        in_server = 1
-        depth = 0
-        has_http2 = 0
-        needs_http2 = 0
-      }
-
-      if (in_server && line ~ /^[[:space:]]*http2[[:space:]]+on;[[:space:]]*$/) {
-        has_http2 = 1
-      }
-      if (in_server && line ~ /^[[:space:]]*listen[[:space:]]+443[[:space:]]+ssl[[:space:]]+http2;[[:space:]]*$/) {
-        sub(/[[:space:]]+http2;/, ";", line)
-        needs_http2 = 1
-      }
-      if (in_server && line ~ /^[[:space:]]*listen[[:space:]]+\[::\]:443[[:space:]]+ssl[[:space:]]+http2;[[:space:]]*$/) {
-        sub(/[[:space:]]+http2;/, ";", line)
-        needs_http2 = 1
-      }
-
-      if (in_server && depth == 1 && line ~ /^[[:space:]]*}[[:space:]]*$/) {
-        if (needs_http2 && !has_http2) {
-          print "  http2 on;"
-          has_http2 = 1
-        }
-      }
-
-      print line
-
-      if (in_server) {
-        open_count = gsub(/\{/, "{", line)
-        close_count = gsub(/\}/, "}", line)
-        depth += open_count
-        depth -= close_count
-        if (depth <= 0) {
-          in_server = 0
-          depth = 0
-          has_http2 = 0
-          needs_http2 = 0
-        }
-      }
-    }
-  ' "$file" > "$tmp_file"
-  as_root install -m 0644 -o root -g root "$tmp_file" "$file"
-}
-
-migrate_nginx_http2_deprecated_all() {
-  local conf
-  for conf in /etc/nginx/conf.d/aurora-*.conf; do
-    [ -e "$conf" ] || continue
-    migrate_nginx_http2_deprecated_file "$conf"
-  done
+  install_package nginx
 }
 
 ensure_nginx_template_file() {
@@ -825,6 +655,7 @@ ensure_nginx_template_file() {
 install_nginx_reverse_proxy() {
   local release_tag="$1"
   local app_host proxy_server_name backend_port conf_tmp
+  load_nginx_helpers "$release_tag"
   ensure_nginx_installed
   ensure_nginx_cache_dir
   ensure_nginx_template_file "$release_tag"

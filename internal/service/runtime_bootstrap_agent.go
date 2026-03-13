@@ -109,24 +109,26 @@ func (s *RuntimeBootstrapService) BootstrapAgent(
 		return nil, fmt.Errorf("bootstrap_token is required")
 	}
 
-	consumeResult, consumeErr := s.runtimeRepo.ConsumeBootstrapTokenTx(ctx, req.BootstrapToken, time.Now().UTC())
-	if consumeErr != nil {
-		return nil, fmt.Errorf("consume bootstrap token failed: %w", consumeErr)
-	}
-	if consumeResult == nil || !consumeResult.Consumed {
-		return nil, ErrAgentBootstrapTokenInvalid
-	}
-	clusterScope := strings.TrimSpace(consumeResult.Record.ClusterScope)
-	if clusterScope != "" && clusterScope != "*" && clusterScope != claims.ClusterID {
-		return nil, ErrAgentBootstrapTokenInvalid
-	}
-
 	csr, csrClaims, csrErr := parseAndVerifyCSR(req.CSRPEM)
 	if csrErr != nil {
 		return nil, csrErr
 	}
 	if err := compareAgentClaims(claims, csrClaims); err != nil {
 		return nil, ErrAgentCSRInvalid
+	}
+	serverCSR, serverCSRClaims, serverCSRErr := parseAndVerifyCSR(req.ServerCSRPEM)
+	if serverCSRErr != nil {
+		return nil, serverCSRErr
+	}
+	if err := compareAgentClaims(claims, serverCSRClaims); err != nil {
+		return nil, ErrAgentCSRInvalid
+	}
+	consumeResult, consumeErr := s.runtimeRepo.ConsumeBootstrapTokenTx(ctx, req.BootstrapToken, claims.ClusterID, time.Now().UTC())
+	if consumeErr != nil {
+		return nil, fmt.Errorf("consume bootstrap token failed: %w", consumeErr)
+	}
+	if consumeResult == nil || !consumeResult.Consumed {
+		return nil, ErrAgentBootstrapTokenInvalid
 	}
 
 	submittedAt := time.Now().UTC()
@@ -175,12 +177,16 @@ func (s *RuntimeBootstrapService) BootstrapAgent(
 		}
 	}
 
-	caCert, caKey, caCertPEM, caErr := s.loadAgentCA()
+	caCert, caKey, _, caErr := s.loadAgentCA()
 	if caErr != nil {
 		return nil, caErr
 	}
+	adminServerCAPEM, adminCAErr := s.loadAdminServerCAPEM()
+	if adminCAErr != nil {
+		return nil, adminCAErr
+	}
 
-	issuedCertPEM, certMeta, issueErr := issueAgentClientCert(
+	clientCertPEM, clientMeta, issueErr := issueAgentCertificate(
 		caCert,
 		caKey,
 		csr,
@@ -188,6 +194,7 @@ func (s *RuntimeBootstrapService) BootstrapAgent(
 		strings.TrimSpace(req.Hostname),
 		resolvedIP,
 		s.agentCertTTL,
+		[]x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	)
 	if issueErr != nil {
 		csrRequest.Status = csrStatusRejected
@@ -201,37 +208,63 @@ func (s *RuntimeBootstrapService) BootstrapAgent(
 		})
 		return nil, issueErr
 	}
+	serverCertPEM, serverMeta, serverIssueErr := issueAgentCertificate(
+		caCert,
+		caKey,
+		serverCSR,
+		claims,
+		strings.TrimSpace(req.Hostname),
+		resolvedIP,
+		s.agentCertTTL,
+		[]x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	)
+	if serverIssueErr != nil {
+		csrRequest.Status = csrStatusRejected
+		csrRequest.RejectedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		csrRequest.RejectedBy = "controller:issuer"
+		csrRequest.RejectedReason = strings.TrimSpace(serverIssueErr.Error())
+		_ = s.upsertCSRRequestRecord(ctx, csrRequest)
+		_ = s.writeAgentAuditEvent(ctx, claims.NodeID, "csr.issued", "error", csrRequest.RejectedBy, map[string]any{
+			"request_id": csrRequest.RequestID,
+			"reason":     csrRequest.RejectedReason,
+		})
+		return nil, serverIssueErr
+	}
 	csrRequest.Status = csrStatusIssued
 	csrRequest.IssuedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	csrRequest.IssuedSerial = certMeta.SerialHex
-	csrRequest.IssuedExpires = certMeta.ExpiresAt.UTC().Format(time.RFC3339Nano)
+	csrRequest.IssuedSerial = clientMeta.SerialHex
+	csrRequest.IssuedExpires = clientMeta.ExpiresAt.UTC().Format(time.RFC3339Nano)
 	if err := s.upsertCSRRequestRecord(ctx, csrRequest); err != nil {
 		return nil, err
 	}
 	_ = s.writeAgentAuditEvent(ctx, claims.NodeID, "csr.issued", "ok", "controller:issuer", map[string]any{
 		"request_id": csrRequest.RequestID,
-		"serial":     certMeta.SerialHex,
+		"serial":     clientMeta.SerialHex,
 		"expires_at": csrRequest.IssuedExpires,
 	})
 
 	kv := map[string]string{
-		keycfg.RuntimeAgentNodeKey(claims.NodeID, "agent_id"):                claims.NodeID,
-		keycfg.RuntimeAgentNodeKey(claims.NodeID, "service_id"):              claims.ServiceID,
-		keycfg.RuntimeAgentNodeKey(claims.NodeID, "role"):                    claims.Role,
-		keycfg.RuntimeAgentNodeKey(claims.NodeID, "cluster_id"):              claims.ClusterID,
-		keycfg.RuntimeAgentNodeKey(claims.NodeID, "status"):                  "bootstrapped",
-		keycfg.RuntimeAgentNodeKey(claims.NodeID, "hostname"):                strings.TrimSpace(req.Hostname),
-		keycfg.RuntimeAgentNodeKey(claims.NodeID, "ip"):                      resolvedIP,
-		keycfg.RuntimeAgentNodeKey(claims.NodeID, "platform"):                strings.TrimSpace(req.Platform),
-		keycfg.RuntimeAgentNodeKey(claims.NodeID, "probe_addr"):              strings.TrimSpace(req.AgentProbeAddr),
-		keycfg.RuntimeAgentNodeKey(claims.NodeID, "grpc_endpoint"):           resolvedGRPCEndpoint,
-		keycfg.RuntimeAgentNodeKey(claims.NodeID, "bootstrap/issued_at"):     time.Now().UTC().Format(time.RFC3339Nano),
-		keycfg.RuntimeAgentNodeKey(claims.NodeID, "bootstrap/peer_address"):  strings.TrimSpace(peerAddr),
-		keycfg.RuntimeAgentNodeKey(claims.NodeID, "bootstrap/peer_host"):     peerHost,
-		keycfg.RuntimeAgentNodeKey(claims.NodeID, "cert/serial"):             certMeta.SerialHex,
-		keycfg.RuntimeAgentNodeKey(claims.NodeID, "cert/expires_at"):         certMeta.ExpiresAt.UTC().Format(time.RFC3339Nano),
-		keycfg.RuntimeAgentNodeKey(claims.NodeID, "cert/fingerprint_sha256"): certMeta.FingerprintSHA256,
-		keycfg.RuntimeAgentNodeKey(claims.NodeID, "cert/subject"):            certMeta.Subject,
+		keycfg.RuntimeAgentNodeKey(claims.NodeID, "agent_id"):                       claims.NodeID,
+		keycfg.RuntimeAgentNodeKey(claims.NodeID, "service_id"):                     claims.ServiceID,
+		keycfg.RuntimeAgentNodeKey(claims.NodeID, "role"):                           claims.Role,
+		keycfg.RuntimeAgentNodeKey(claims.NodeID, "cluster_id"):                     claims.ClusterID,
+		keycfg.RuntimeAgentNodeKey(claims.NodeID, "status"):                         "bootstrapped",
+		keycfg.RuntimeAgentNodeKey(claims.NodeID, "hostname"):                       strings.TrimSpace(req.Hostname),
+		keycfg.RuntimeAgentNodeKey(claims.NodeID, "ip"):                             resolvedIP,
+		keycfg.RuntimeAgentNodeKey(claims.NodeID, "platform"):                       strings.TrimSpace(req.Platform),
+		keycfg.RuntimeAgentNodeKey(claims.NodeID, "probe_addr"):                     strings.TrimSpace(req.AgentProbeAddr),
+		keycfg.RuntimeAgentNodeKey(claims.NodeID, "grpc_endpoint"):                  resolvedGRPCEndpoint,
+		keycfg.RuntimeAgentNodeKey(claims.NodeID, "bootstrap/issued_at"):            time.Now().UTC().Format(time.RFC3339Nano),
+		keycfg.RuntimeAgentNodeKey(claims.NodeID, "bootstrap/peer_address"):         strings.TrimSpace(peerAddr),
+		keycfg.RuntimeAgentNodeKey(claims.NodeID, "bootstrap/peer_host"):            peerHost,
+		keycfg.RuntimeAgentNodeKey(claims.NodeID, "cert/client_serial"):             clientMeta.SerialHex,
+		keycfg.RuntimeAgentNodeKey(claims.NodeID, "cert/client_expires_at"):         clientMeta.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		keycfg.RuntimeAgentNodeKey(claims.NodeID, "cert/client_fingerprint_sha256"): clientMeta.FingerprintSHA256,
+		keycfg.RuntimeAgentNodeKey(claims.NodeID, "cert/client_subject"):            clientMeta.Subject,
+		keycfg.RuntimeAgentNodeKey(claims.NodeID, "cert/server_serial"):             serverMeta.SerialHex,
+		keycfg.RuntimeAgentNodeKey(claims.NodeID, "cert/server_expires_at"):         serverMeta.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		keycfg.RuntimeAgentNodeKey(claims.NodeID, "cert/server_fingerprint_sha256"): serverMeta.FingerprintSHA256,
+		keycfg.RuntimeAgentNodeKey(claims.NodeID, "cert/server_subject"):            serverMeta.Subject,
 	}
 	for key, value := range kv {
 		if upsertErr := s.runtimeRepo.Upsert(ctx, key, strings.TrimSpace(value)); upsertErr != nil {
@@ -240,10 +273,13 @@ func (s *RuntimeBootstrapService) BootstrapAgent(
 	}
 
 	return &AgentBootstrapResult{
-		ClientCertPEM: issuedCertPEM,
-		CACertPEM:     caCertPEM,
-		SerialHex:     certMeta.SerialHex,
-		ExpiresAt:     certMeta.ExpiresAt.UTC(),
+		ClientCertPEM:    clientCertPEM,
+		ServerCertPEM:    serverCertPEM,
+		AdminServerCAPEM: adminServerCAPEM,
+		ClientSerialHex:  clientMeta.SerialHex,
+		ServerSerialHex:  serverMeta.SerialHex,
+		ClientExpiresAt:  clientMeta.ExpiresAt.UTC(),
+		ServerExpiresAt:  serverMeta.ExpiresAt.UTC(),
 	}, nil
 }
 
@@ -268,12 +304,23 @@ func (s *RuntimeBootstrapService) RenewAgentCertificate(
 	if err := compareAgentClaims(peerClaims, csrClaims); err != nil {
 		return nil, ErrAgentCSRInvalid
 	}
+	serverCSR, serverCSRClaims, serverCSRErr := parseAndVerifyCSR(req.ServerCSRPEM)
+	if serverCSRErr != nil {
+		return nil, serverCSRErr
+	}
+	if err := compareAgentClaims(peerClaims, serverCSRClaims); err != nil {
+		return nil, ErrAgentCSRInvalid
+	}
 
-	caCert, caKey, caCertPEM, caErr := s.loadAgentCA()
+	caCert, caKey, _, caErr := s.loadAgentCA()
 	if caErr != nil {
 		return nil, caErr
 	}
-	issuedCertPEM, certMeta, issueErr := issueAgentClientCert(
+	adminServerCAPEM, adminCAErr := s.loadAdminServerCAPEM()
+	if adminCAErr != nil {
+		return nil, adminCAErr
+	}
+	clientCertPEM, clientMeta, issueErr := issueAgentCertificate(
 		caCert,
 		caKey,
 		csr,
@@ -281,6 +328,7 @@ func (s *RuntimeBootstrapService) RenewAgentCertificate(
 		strings.TrimSpace(hostname),
 		strings.TrimSpace(ipAddress),
 		s.agentCertTTL,
+		[]x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	)
 	if issueErr != nil {
 		_ = s.writeAgentAuditEvent(ctx, peerClaims.NodeID, "cert.renew", "error", "agent:"+peerClaims.NodeID, map[string]any{
@@ -288,14 +336,34 @@ func (s *RuntimeBootstrapService) RenewAgentCertificate(
 		})
 		return nil, issueErr
 	}
+	serverCertPEM, serverMeta, serverIssueErr := issueAgentCertificate(
+		caCert,
+		caKey,
+		serverCSR,
+		peerClaims,
+		strings.TrimSpace(hostname),
+		strings.TrimSpace(ipAddress),
+		s.agentCertTTL,
+		[]x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	)
+	if serverIssueErr != nil {
+		_ = s.writeAgentAuditEvent(ctx, peerClaims.NodeID, "cert.renew", "error", "agent:"+peerClaims.NodeID, map[string]any{
+			"reason": strings.TrimSpace(serverIssueErr.Error()),
+		})
+		return nil, serverIssueErr
+	}
 
 	renewAt := time.Now().UTC().Format(time.RFC3339Nano)
 	kv := map[string]string{
-		keycfg.RuntimeAgentNodeKey(peerClaims.NodeID, "cert/serial"):             certMeta.SerialHex,
-		keycfg.RuntimeAgentNodeKey(peerClaims.NodeID, "cert/expires_at"):         certMeta.ExpiresAt.UTC().Format(time.RFC3339Nano),
-		keycfg.RuntimeAgentNodeKey(peerClaims.NodeID, "cert/fingerprint_sha256"): certMeta.FingerprintSHA256,
-		keycfg.RuntimeAgentNodeKey(peerClaims.NodeID, "cert/subject"):            certMeta.Subject,
-		keycfg.RuntimeAgentNodeKey(peerClaims.NodeID, "cert/renewed_at"):         renewAt,
+		keycfg.RuntimeAgentNodeKey(peerClaims.NodeID, "cert/client_serial"):             clientMeta.SerialHex,
+		keycfg.RuntimeAgentNodeKey(peerClaims.NodeID, "cert/client_expires_at"):         clientMeta.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		keycfg.RuntimeAgentNodeKey(peerClaims.NodeID, "cert/client_fingerprint_sha256"): clientMeta.FingerprintSHA256,
+		keycfg.RuntimeAgentNodeKey(peerClaims.NodeID, "cert/client_subject"):            clientMeta.Subject,
+		keycfg.RuntimeAgentNodeKey(peerClaims.NodeID, "cert/server_serial"):             serverMeta.SerialHex,
+		keycfg.RuntimeAgentNodeKey(peerClaims.NodeID, "cert/server_expires_at"):         serverMeta.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		keycfg.RuntimeAgentNodeKey(peerClaims.NodeID, "cert/server_fingerprint_sha256"): serverMeta.FingerprintSHA256,
+		keycfg.RuntimeAgentNodeKey(peerClaims.NodeID, "cert/server_subject"):            serverMeta.Subject,
+		keycfg.RuntimeAgentNodeKey(peerClaims.NodeID, "cert/renewed_at"):                renewAt,
 	}
 	for key, value := range kv {
 		if upsertErr := s.runtimeRepo.Upsert(ctx, key, strings.TrimSpace(value)); upsertErr != nil {
@@ -303,15 +371,20 @@ func (s *RuntimeBootstrapService) RenewAgentCertificate(
 		}
 	}
 	_ = s.writeAgentAuditEvent(ctx, peerClaims.NodeID, "cert.renew", "ok", "agent:"+peerClaims.NodeID, map[string]any{
-		"serial":     certMeta.SerialHex,
-		"expires_at": certMeta.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		"client_serial":     clientMeta.SerialHex,
+		"client_expires_at": clientMeta.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		"server_serial":     serverMeta.SerialHex,
+		"server_expires_at": serverMeta.ExpiresAt.UTC().Format(time.RFC3339Nano),
 	})
 
 	return &AgentBootstrapResult{
-		ClientCertPEM: issuedCertPEM,
-		CACertPEM:     caCertPEM,
-		SerialHex:     certMeta.SerialHex,
-		ExpiresAt:     certMeta.ExpiresAt.UTC(),
+		ClientCertPEM:    clientCertPEM,
+		ServerCertPEM:    serverCertPEM,
+		AdminServerCAPEM: adminServerCAPEM,
+		ClientSerialHex:  clientMeta.SerialHex,
+		ServerSerialHex:  serverMeta.SerialHex,
+		ClientExpiresAt:  clientMeta.ExpiresAt.UTC(),
+		ServerExpiresAt:  serverMeta.ExpiresAt.UTC(),
 	}, nil
 }
 
@@ -519,6 +592,28 @@ func (s *RuntimeBootstrapService) loadAgentCA() (*x509.Certificate, any, string,
 	return caCert, caKey, strings.TrimSpace(string(caCertPEMBytes)), nil
 }
 
+func (s *RuntimeBootstrapService) loadAdminServerCAPEM() (string, error) {
+	if s == nil {
+		return "", fmt.Errorf("runtime bootstrap service is nil")
+	}
+	cleanPath := strings.TrimSpace(s.adminCACertPath)
+	if cleanPath == "" {
+		return "", fmt.Errorf("admin server ca path is not configured")
+	}
+	raw, err := os.ReadFile(cleanPath)
+	if err != nil {
+		return "", fmt.Errorf("read admin server ca failed: %w", err)
+	}
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return "", fmt.Errorf("admin server ca pem is empty")
+	}
+	if err := validateCertificatePEM(trimmed); err != nil {
+		return "", fmt.Errorf("admin server ca pem invalid: %w", err)
+	}
+	return trimmed, nil
+}
+
 func caPrivateKeyMatchesCertificate(cert *x509.Certificate, key any) bool {
 	if cert == nil || cert.PublicKey == nil || key == nil {
 		return false
@@ -548,7 +643,7 @@ func caPrivateKeyMatchesCertificate(cert *x509.Certificate, key any) bool {
 	}
 }
 
-func issueAgentClientCert(
+func issueAgentCertificate(
 	caCert *x509.Certificate,
 	caKey any,
 	csr *x509.CertificateRequest,
@@ -556,6 +651,7 @@ func issueAgentClientCert(
 	hostname string,
 	ipAddress string,
 	ttl time.Duration,
+	extKeyUsage []x509.ExtKeyUsage,
 ) (string, issuedCertMetadata, error) {
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
@@ -573,6 +669,9 @@ func issueAgentClientCert(
 		ipAddresses = append(ipAddresses, ip)
 	}
 	uris := buildAgentIdentityURIs(claims)
+	if len(extKeyUsage) == 0 {
+		extKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
+	}
 
 	tpl := &x509.Certificate{
 		SerialNumber: serial,
@@ -587,7 +686,7 @@ func issueAgentClientCert(
 		NotBefore:             now.Add(-5 * time.Minute),
 		NotAfter:              expiresAt,
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		ExtKeyUsage:           extKeyUsage,
 		BasicConstraintsValid: true,
 		DNSNames:              dnsNames,
 		IPAddresses:           ipAddresses,
@@ -665,7 +764,7 @@ func (s *RuntimeBootstrapService) UpsertConnectedAgent(
 
 	remoteHost := normalizePeerRemoteHost(peer.RemoteAddress)
 	agentGRPCEndpoint := strings.TrimSpace(input.AgentGRPCEndpoint)
-	if remoteHost != "" {
+	if agentGRPCEndpoint == "" && remoteHost != "" {
 		if _, port, splitErr := net.SplitHostPort(strings.TrimSpace(input.AgentProbeAddr)); splitErr == nil && strings.TrimSpace(port) != "" {
 			agentGRPCEndpoint = net.JoinHostPort(remoteHost, strings.TrimSpace(port))
 		}

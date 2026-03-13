@@ -89,15 +89,6 @@ type CertStoreCfg struct {
 	Prefix string
 }
 
-type CorsCfg struct {
-	AllowOrigins     []string
-	AllowMethods     []string
-	AllowHeaders     []string
-	ExposeHeaders    []string
-	AllowCredentials bool
-	MaxAge           time.Duration
-}
-
 type RedisCfg struct {
 	Addr               string
 	Username           string
@@ -129,7 +120,6 @@ type Config struct {
 	TokenSecret   TokenSecretCfg
 	TokenTTL      TokenTTLCfg
 	CertStore     CertStoreCfg
-	Cors          CorsCfg
 }
 
 func LoadConfig() *Config {
@@ -218,19 +208,6 @@ func LoadConfig() *Config {
 
 		CertStore: CertStoreCfg{
 			Prefix: keycfg.CertStorePrefix,
-		},
-		Cors: CorsCfg{
-			AllowOrigins: []string{
-				"https://localhost:80",
-				"https://localhost:443",
-			},
-			AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
-
-			AllowHeaders: []string{"Origin", "Content-Type", "Accept", "Authorization"},
-
-			ExposeHeaders:    []string{},
-			AllowCredentials: true,
-			MaxAge:           12 * time.Hour,
 		},
 	}
 }

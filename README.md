@@ -1,11 +1,11 @@
 # Aurora Admin Service
 
-Admin service for Aurora platform.
+Admin service for Aurora platform (control plane).
 
 This repository contains:
 - Go backend (`cmd/server`) with HTTP + gRPC (h2c) transport.
 - React/Vite admin UI (`src`) embedded into Go binary via `go:embed`.
-- Runtime config bootstrap to etcd (`/runtime`, `/shared/cors`, `/endpoint/admin`).
+- Runtime config bootstrap to etcd (`/runtime`, `/endpoint/admin`).
 
 ## Main Features
 
@@ -43,7 +43,6 @@ Startup flow:
 Seeded key spaces:
 
 - `/runtime/*`
-- `/shared/cors/*`
 - `/endpoint/admin` (value format: `running:<host:port>`)
 
 Optional runtime fields (can be empty/missing):
@@ -126,25 +125,45 @@ Dev image (air hot reload):
 docker build -t aurora-admin-service:dev -f Dockerfile.dev .
 ```
 
-## Linux Install (systemd)
+## Quick Install (Linux/systemd via curl)
 
-Install assets:
+```bash
+curl -fsSL https://raw.githubusercontent.com/phucle996/aurora-admin/main/install/install.sh -o install.sh
+chmod +x install.sh
+
+# generate template config
+./install.sh --config ./aurora-admin.env
+
+# edit env values, then install
+sudo ./install.sh -f ./aurora-admin.env
+```
+
+Install specific release:
+
+```bash
+sudo AURORA_ADMIN_VERSION=v20260305120000-abc12345-alpha ./install.sh -f ./aurora-admin.env
+```
+
+After install:
+
+```bash
+sudo systemctl status aurora-admin.service --no-pager
+```
+
+## More Docs
+
+- [INSTALL.md](./INSTALL.md)
+- [CONFIGURATION.md](./CONFIGURATION.md)
+- [ARCHITECTURE.md](./ARCHITECTURE.md)
+
+## Linux Install (Details)
+
+Installer assets in repo:
 
 - `install/install.sh`
 - `install/aurora-admin.service`
-
-Usage:
-
-```bash
-# generate env template
-./install/install.sh --config
-
-# install from env file
-./install/install.sh -f ./aurora-admin.env.sample
-
-# install specific release tag
-./install/install.sh -f ./aurora-admin.env.sample -v v20260305120000-abc12345-alpha
-```
+- `install/nginx.conf`
+- `install/nginx_helpers.sh`
 
 Notes:
 

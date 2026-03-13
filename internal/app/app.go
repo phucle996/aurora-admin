@@ -63,7 +63,6 @@ func NewApplication(cfg *config.Config) (*App, error) {
 	router.Use(
 		middleware.RequestContext(),
 		middleware.AccessLog(),
-		middleware.CORS(&cfg.Cors),
 		gin.Recovery(),
 	)
 
