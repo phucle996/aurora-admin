@@ -320,6 +320,7 @@ func (h *EnabledModuleHandler) AgentInstallBootstrapMetadata(c *gin.Context) {
 		"admin_grpc_endpoint": net.JoinHostPort(host, fmt.Sprintf("%d", h.AppPort)),
 		"admin_server_name":   host,
 		"admin_grpc_port":     h.AppPort,
+		"cluster_id":          "default",
 	}, "agent install bootstrap metadata")
 }
 

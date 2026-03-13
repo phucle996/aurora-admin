@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"admin/internal/service"
+	"admin/pkg/logger"
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
@@ -27,6 +28,7 @@ const (
 	runtimeReportAgentMethod         = "ReportAgentHeartbeat"
 	runtimeGetAgentMetricsPolicy     = "GetAgentMetricsPolicy"
 	runtimeReportAgentMetrics        = "ReportAgentMetrics"
+	runtimeGetHostRoutingSnapshot    = "GetHostRoutingSnapshot"
 	runtimeGetRuntimeBootstrapPath   = "/" + runtimeServiceName + "/" + runtimeGetRuntimeBootstrapMethod
 	runtimeGetUMSBootstrapPath       = "/" + runtimeServiceName + "/" + runtimeGetUMSBootstrapMethod
 	runtimeBootstrapAgentPath        = "/" + runtimeServiceName + "/" + runtimeBootstrapAgentMethod
@@ -34,6 +36,7 @@ const (
 	runtimeReportAgentPath           = "/" + runtimeServiceName + "/" + runtimeReportAgentMethod
 	runtimeGetAgentPolicyPath        = "/" + runtimeServiceName + "/" + runtimeGetAgentMetricsPolicy
 	runtimeReportAgentMetricsPath    = "/" + runtimeServiceName + "/" + runtimeReportAgentMetrics
+	runtimeGetHostRoutingPath        = "/" + runtimeServiceName + "/" + runtimeGetHostRoutingSnapshot
 )
 
 type RuntimeTransportService struct {
@@ -48,6 +51,7 @@ type runtimeTransportServer interface {
 	ReportAgentHeartbeat(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	GetAgentMetricsPolicy(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	ReportAgentMetrics(context.Context, *structpb.Struct) (*structpb.Struct, error)
+	GetHostRoutingSnapshot(context.Context, *structpb.Struct) (*structpb.Struct, error)
 }
 
 func NewRuntimeTransportService(runtimeSvc *service.RuntimeBootstrapService) *RuntimeTransportService {
@@ -131,8 +135,11 @@ func (s *RuntimeTransportService) BootstrapAgent(
 			return nil, status.Error(codes.PermissionDenied, "invalid bootstrap token")
 		case errors.Is(err, service.ErrAgentCSRInvalid):
 			return nil, status.Error(codes.InvalidArgument, "invalid csr")
+		case isAgentBootstrapValidationError(err):
+			return nil, status.Error(codes.InvalidArgument, err.Error())
 		default:
-			return nil, status.Error(codes.Internal, "agent bootstrap failed")
+			logger.SysError("runtime.bootstrap_agent", err, "bootstrap agent failed")
+			return nil, status.Error(codes.Internal, err.Error())
 		}
 	}
 
@@ -186,8 +193,11 @@ func (s *RuntimeTransportService) RenewAgentCertificate(
 		switch {
 		case errors.Is(renewErr, service.ErrAgentCSRInvalid):
 			return nil, status.Error(codes.InvalidArgument, "invalid csr")
+		case isAgentBootstrapValidationError(renewErr):
+			return nil, status.Error(codes.InvalidArgument, renewErr.Error())
 		default:
-			return nil, status.Error(codes.Internal, "renew agent certificate failed")
+			logger.SysError("runtime.renew_agent_cert", renewErr, "renew agent certificate failed")
+			return nil, status.Error(codes.Internal, renewErr.Error())
 		}
 	}
 
@@ -317,6 +327,54 @@ func (s *RuntimeTransportService) GetAgentMetricsPolicy(
 		"batch_sample_interval_seconds":  int64(policy.BatchSampleInterval / time.Second),
 		"stream_sample_interval_seconds": int64(policy.StreamSampleInterval / time.Second),
 		"max_batch_records":              int64(policy.MaxBatchRecords),
+	})
+	if encodeErr != nil {
+		return nil, status.Error(codes.Internal, "failed to build grpc response payload")
+	}
+	return res, nil
+}
+
+func (s *RuntimeTransportService) GetHostRoutingSnapshot(
+	ctx context.Context,
+	req *structpb.Struct,
+) (*structpb.Struct, error) {
+	if s == nil || s.runtimeSvc == nil {
+		return nil, status.Error(codes.Unavailable, "runtime bootstrap service unavailable")
+	}
+	_, peerInfo, certErr := extractClientPeerDetails(ctx)
+	if certErr != nil {
+		return nil, status.Error(codes.Unauthenticated, certErr.Error())
+	}
+	if err := validateAgentPeerClaims(peerInfo.Claims); err != nil {
+		return nil, status.Error(codes.PermissionDenied, err.Error())
+	}
+	if err := authorizeAgentRole(runtimeGetHostRoutingPath, peerInfo.Claims.Role); err != nil {
+		return nil, status.Error(codes.PermissionDenied, err.Error())
+	}
+	if agentID := strings.TrimSpace(readStructString(req, "agent_id")); agentID != "" {
+		if err := validateAgentIdentityFromPeer(agentID, peerInfo.Claims); err != nil {
+			return nil, status.Error(codes.PermissionDenied, err.Error())
+		}
+	}
+
+	entries, err := s.runtimeSvc.ListHostRoutingEntries(ctx)
+	if err != nil {
+		logger.SysError("runtime.host_routing_snapshot", err, "list host routing snapshot failed")
+		return nil, status.Error(codes.Internal, "list host routing snapshot failed")
+	}
+	items := make([]any, 0, len(entries))
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.Host) == "" || strings.TrimSpace(entry.Address) == "" {
+			continue
+		}
+		items = append(items, map[string]any{
+			"host":    strings.TrimSpace(entry.Host),
+			"address": strings.TrimSpace(entry.Address),
+		})
+	}
+	res, encodeErr := structpb.NewStruct(map[string]any{
+		"items": items,
+		"count": len(items),
 	})
 	if encodeErr != nil {
 		return nil, status.Error(codes.Internal, "failed to build grpc response payload")
@@ -514,6 +572,9 @@ func authorizeAgentRole(methodPath string, role string) error {
 		runtimeReportAgentMetricsPath: {
 			"agent": {},
 		},
+		runtimeGetHostRoutingPath: {
+			"agent": {},
+		},
 		runtimeRenewAgentCertPath: {
 			"agent": {},
 		},
@@ -681,6 +742,10 @@ func RegisterRuntimeTransportServer(server *gogrpc.Server, svc *RuntimeTransport
 				Handler:    runtimeGetAgentMetricsPolicyHandler,
 			},
 			{
+				MethodName: runtimeGetHostRoutingSnapshot,
+				Handler:    runtimeGetHostRoutingSnapshotHandler,
+			},
+			{
 				MethodName: runtimeReportAgentMetrics,
 				Handler:    runtimeReportAgentMetricsHandler,
 			},
@@ -794,6 +859,33 @@ func runtimeGetAgentMetricsPolicyHandler(
 	return interceptor(ctx, in, info, handler)
 }
 
+func runtimeGetHostRoutingSnapshotHandler(
+	srv any,
+	ctx context.Context,
+	dec func(any) error,
+	interceptor gogrpc.UnaryServerInterceptor,
+) (any, error) {
+	in := new(structpb.Struct)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	base, ok := srv.(runtimeTransportServer)
+	if !ok {
+		return nil, status.Error(codes.Internal, "runtime transport server unavailable")
+	}
+	if interceptor == nil {
+		return base.GetHostRoutingSnapshot(ctx, in)
+	}
+	info := &gogrpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: runtimeGetHostRoutingPath,
+	}
+	handler := func(currentCtx context.Context, req any) (any, error) {
+		return base.GetHostRoutingSnapshot(currentCtx, req.(*structpb.Struct))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func runtimeReportAgentMetricsHandler(
 	srv interface{},
 	ctx context.Context,
@@ -896,4 +988,16 @@ func readStructInt32(req *structpb.Struct, key string) int32 {
 		return -1
 	}
 	return int32(number)
+}
+
+func isAgentBootstrapValidationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if msg == "" {
+		return false
+	}
+	return strings.Contains(msg, " is required") ||
+		strings.Contains(msg, "claim mismatch")
 }
