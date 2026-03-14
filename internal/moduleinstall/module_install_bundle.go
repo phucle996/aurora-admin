@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -71,8 +72,14 @@ func (s *ModuleInstallService) installModuleViaAgentBundle(
 		if err != nil {
 			return nil, nil, fmt.Errorf("issue module bootstrap token failed: %w", err)
 		}
-		env["ADMIN_RPC_BOOTSTRAP_TOKEN"] = strings.TrimSpace(token)
+		token = strings.TrimSpace(token)
+		if token == "" {
+			return nil, nil, fmt.Errorf("issue module bootstrap token failed: empty token returned for module %s", canonicalModuleName(moduleName))
+		}
+		env["ADMIN_RPC_BOOTSTRAP_TOKEN"] = token
+		logInstall(logFn, "install", "injected admin rpc bootstrap token for module=%s", canonicalModuleName(moduleName))
 	}
+	logInstall(logFn, "install", "dispatching agent bundle install env_keys=%s", strings.Join(sortedEnvKeys(env), ","))
 	agentReq := agentInstallModuleRequest{
 		APIVersion:       installerRPCVersionV1,
 		RequestID:        newAgentOperationRequestID("install", moduleName),
@@ -122,6 +129,22 @@ func (s *ModuleInstallService) installModuleViaAgentBundle(
 		return res, tlsBundle, err
 	}
 	return res, tlsBundle, nil
+}
+
+func sortedEnvKeys(env map[string]string) []string {
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func shouldUseAgentBundleInstall(moduleName string, target moduleInstallTarget) bool {
