@@ -6,9 +6,9 @@ import (
 )
 
 const (
-	EndpointPrefix   = "/endpoint"
-	RuntimePrefix    = "/runtime"
-	RegistryPrefix   = "/registry"
+	EndpointPrefix = "/endpoint"
+	RuntimePrefix  = "/runtime"
+	RegistryPrefix = "/registry"
 
 	EndpointAdminKey = "/endpoint/admin"
 
@@ -25,7 +25,10 @@ const (
 	RuntimeAgentCSRPrefix            = "/runtime/agent/csr_requests"
 	RuntimeAgentAuditPrefix          = "/runtime/agent/audit"
 	RuntimeAgentRevocationPrefix     = "/runtime/agent/revocations"
+	RuntimeInstallOperationPrefix    = "/runtime/install/operations"
 	RegistryAgentPrefix              = "/registry/agents"
+	RuntimeInstallDesiredPrefix      = "/runtime/install/desired"
+	RegistryModulesPrefix            = "/registry/modules"
 
 	APIKeyCurrentVersionPath       = "/apikey/current_version"
 	APIKeyCurrentRotatedAtPath     = "/apikey/current_rotated_at"
@@ -141,6 +144,65 @@ func RegistryAgentKey(agentID string) string {
 	return RegistryAgentPrefix + "/" + id
 }
 
+func RuntimeInstallDesiredKey(agentID string, moduleName string) string {
+	agent := strings.Trim(strings.TrimSpace(agentID), "/")
+	module := strings.Trim(strings.TrimSpace(moduleName), "/")
+	base := RuntimeInstallDesiredPrefix
+	if agent != "" {
+		base = base + "/" + agent
+	}
+	if module == "" {
+		return base
+	}
+	return base + "/" + module
+}
+
+func RuntimeInstallOperationKey(operationID string) string {
+	id := strings.Trim(strings.TrimSpace(operationID), "/")
+	if id == "" {
+		return RuntimeInstallOperationPrefix
+	}
+	return RuntimeInstallOperationPrefix + "/" + id
+}
+
+func RuntimeInstallOperationSummaryKey(operationID string) string {
+	base := RuntimeInstallOperationKey(operationID)
+	if base == RuntimeInstallOperationPrefix {
+		return base
+	}
+	return base + "/summary"
+}
+
+func RuntimeInstallOperationEventsPrefix(operationID string) string {
+	base := RuntimeInstallOperationKey(operationID)
+	if base == RuntimeInstallOperationPrefix {
+		return base
+	}
+	return base + "/events"
+}
+
+func RuntimeInstallOperationEventKey(operationID string, sequence string) string {
+	base := RuntimeInstallOperationEventsPrefix(operationID)
+	seq := strings.Trim(strings.TrimSpace(sequence), "/")
+	if seq == "" {
+		return base
+	}
+	return base + "/" + seq
+}
+
+func RegistryModuleKey(agentID string, moduleName string) string {
+	agent := strings.Trim(strings.TrimSpace(agentID), "/")
+	module := strings.Trim(strings.TrimSpace(moduleName), "/")
+	base := RegistryModulesPrefix
+	if agent != "" {
+		base = base + "/" + agent
+	}
+	if module == "" {
+		return base
+	}
+	return base + "/" + module
+}
+
 func RuntimeAgentMetricsPolicyKey(agentID string, suffix string) string {
 	return RuntimeAgentNodeKey(agentID, "metrics/policy/"+strings.Trim(strings.TrimSpace(suffix), "/"))
 }
@@ -223,15 +285,16 @@ const (
 
 	RTAPIKeyRotateEvery = "/runtime/apikey/rotate_interval"
 
-	RTRedisAddr     = "/runtime/redis/addr"
-	RTRedisUser     = "/runtime/redis/username"
-	RTRedisPass     = "/runtime/redis/password"
-	RTRedisDB       = "/runtime/redis/db"
-	RTRedisTLS      = "/runtime/redis/use_tls"
-	RTRedisCA       = "/runtime/redis/ca"
-	RTRedisKey      = "/runtime/redis/client_key"
-	RTRedisCert     = "/runtime/redis/client_cert"
-	RTRedisInsecure = "/runtime/redis/insecure_skip_verify"
+	RTRedisAddr              = "/runtime/redis/addr"
+	RTRedisUser              = "/runtime/redis/username"
+	RTRedisPass              = "/runtime/redis/password"
+	RTRedisDB                = "/runtime/redis/db"
+	RTRedisTLS               = "/runtime/redis/use_tls"
+	RTRedisCA                = "/runtime/redis/ca"
+	RTRedisKey               = "/runtime/redis/client_key"
+	RTInstallReconcilePolicy = "/runtime/install/reconcile/policy"
+	RTRedisCert              = "/runtime/redis/client_cert"
+	RTRedisInsecure          = "/runtime/redis/insecure_skip_verify"
 
 	RTEtcdEndpoints          = "/runtime/etcd/endpoints"
 	RTEtcdAutoSync           = "/runtime/etcd/auto_sync_interval"

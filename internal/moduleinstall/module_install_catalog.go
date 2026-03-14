@@ -12,6 +12,12 @@ type moduleInstallDefinition struct {
 	Aliases         []string
 	MigrationSource *moduleMigrationSource
 	RequireAdminRPC bool
+	ArtifactSource  *moduleArtifactSource
+}
+
+type moduleArtifactSource struct {
+	RepoSlug        string
+	BundleAssetBase string
 }
 
 var moduleInstallDefinitions = []moduleInstallDefinition{
@@ -43,6 +49,10 @@ var moduleInstallDefinitions = []moduleInstallDefinition{
 			},
 			LegacySchema: "ums",
 		},
+		ArtifactSource: &moduleArtifactSource{
+			RepoSlug:        "phucle996/aurora-ums",
+			BundleAssetBase: "aurora-ums",
+		},
 	},
 	{
 		Name: "mail",
@@ -66,6 +76,10 @@ var moduleInstallDefinitions = []moduleInstallDefinition{
 			},
 		},
 		RequireAdminRPC: true,
+		ArtifactSource: &moduleArtifactSource{
+			RepoSlug:        "phucle996/aurora-platform-resource",
+			BundleAssetBase: "aurora-platform-resource",
+		},
 	},
 	{
 		Name: "paas",
@@ -78,6 +92,10 @@ var moduleInstallDefinitions = []moduleInstallDefinition{
 			},
 		},
 		RequireAdminRPC: true,
+		ArtifactSource: &moduleArtifactSource{
+			RepoSlug:        "phucle996/aurora-paas-service",
+			BundleAssetBase: "aurora-paas-service",
+		},
 	},
 	{
 		Name: "dbaas",
@@ -90,6 +108,10 @@ var moduleInstallDefinitions = []moduleInstallDefinition{
 			},
 		},
 		RequireAdminRPC: true,
+		ArtifactSource: &moduleArtifactSource{
+			RepoSlug:        "phucle996/aurora-dbaas-module",
+			BundleAssetBase: "aurora-dbaas-service",
+		},
 	},
 	{
 		Name: "ui",
@@ -157,4 +179,12 @@ func moduleMigrationSourceFor(moduleName string) (moduleMigrationSource, bool) {
 func moduleRequiresAdminRPC(moduleName string) bool {
 	definition, ok := moduleDefinitionByName[canonicalModuleName(moduleName)]
 	return ok && definition.RequireAdminRPC
+}
+
+func moduleArtifactSourceFor(moduleName string) (moduleArtifactSource, bool) {
+	definition, ok := moduleDefinitionByName[canonicalModuleName(moduleName)]
+	if !ok || definition.ArtifactSource == nil {
+		return moduleArtifactSource{}, false
+	}
+	return *definition.ArtifactSource, true
 }

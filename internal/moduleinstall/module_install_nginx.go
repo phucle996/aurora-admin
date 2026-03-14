@@ -28,21 +28,13 @@ func ensureModuleNginxProxyOnTarget(
 	confPath := fmt.Sprintf("/etc/nginx/conf.d/aurora-%s.conf", strings.TrimSpace(moduleName))
 	conf := renderModuleNginxConfig(cleanServerName, backendPort, paths)
 	confB64 := base64.StdEncoding.EncodeToString([]byte(conf))
-	sudoPasswordB64 := ""
-	if target.SudoPassword != nil {
-		sudoPasswordB64 = base64.StdEncoding.EncodeToString([]byte(*target.SudoPassword))
-	}
 
 	logInstall(logFn, "nginx", "configure nginx reverse proxy module=%s host=%s backend_port=%d", moduleName, cleanServerName, backendPort)
 	script := strings.Join([]string{
 		"set -e",
-		"sudo_pw_b64=" + shellEscape(sudoPasswordB64),
-		`sudo_pw=""`,
-		`if [ -n "$sudo_pw_b64" ]; then sudo_pw="$(printf '%s' "$sudo_pw_b64" | base64 -d 2>/dev/null || true)"; fi`,
 		`ensure_root(){`,
 		`  if [ "$(id -u)" -eq 0 ]; then "$@"; return; fi`,
 		`  if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then sudo -n "$@"; return; fi`,
-		`  if command -v sudo >/dev/null 2>&1 && [ -n "$sudo_pw" ]; then printf '%s\n' "$sudo_pw" | sudo -S -k "$@"; return $?; fi`,
 		`  "$@"`,
 		`}`,
 		`if ! command -v nginx >/dev/null 2>&1; then`,

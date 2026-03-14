@@ -14,8 +14,6 @@ var (
 	ErrEnabledModuleServiceNil = errors.New("enabled module service is nil")
 	ErrModuleInstallServiceNil = errors.New("module install service is nil")
 	ErrModuleNameInvalid       = errors.New("module name is invalid")
-	ErrModuleInstallScope      = errors.New("module install scope is invalid")
-	ErrModuleInstallCommand    = errors.New("custom install command is not allowed for local install")
 	ErrModuleInstallerMissing  = errors.New("module installer is not configured")
 	ErrModuleEndpointNotFound  = errors.New("module endpoint not found")
 	ErrModuleEndpointInvalid   = errors.New("module endpoint metadata is invalid")

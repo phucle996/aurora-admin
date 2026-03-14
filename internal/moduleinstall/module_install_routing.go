@@ -14,7 +14,6 @@ func (s *ModuleInstallService) preseedInstallRouting(
 	target moduleInstallTarget,
 	endpoint string,
 	endpointPort int32,
-	result *ModuleInstallResult,
 	rollbacks *rollbackStack,
 	logFn InstallLogFn,
 ) error {
@@ -27,7 +26,6 @@ func (s *ModuleInstallService) preseedInstallRouting(
 	if err := s.endpointRepo.Upsert(ctx, moduleName, endpointValue); err != nil {
 		return fmt.Errorf("upsert endpoint failed: %w", err)
 	}
-	result.EndpointValue = endpointValue
 
 	appPortKey := keycfg.RuntimeAppPortKey(moduleName)
 	if endpointPort <= 0 || endpointPort > 65535 {
@@ -117,7 +115,6 @@ func (s *ModuleInstallService) listConnectedAgentInstallTargets(
 			continue
 		}
 		targets = append(targets, moduleInstallTarget{
-			Scope:             ModuleInstallScopeRemote,
 			AgentID:           agentID,
 			AgentGRPCEndpoint: endpoint,
 			Host:              firstNonEmpty(item.Host, hostFromEndpoint(endpoint)),

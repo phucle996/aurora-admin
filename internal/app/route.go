@@ -27,6 +27,7 @@ func RegisterRoutes(r *gin.Engine, m *Modules,
 		api.GET("/modules/enabled", adminAPIKeyAuth, enabledModule.List)
 		api.GET("/modules/status", adminAPIKeyAuth, enabledModule.Status)
 		api.GET("/modules/install/agents", adminAPIKeyAuth, enabledModule.InstallAgents)
+		api.GET("/modules/install/operations/:operation_id", adminAPIKeyAuth, enabledModule.InstallOperation)
 		api.GET("/modules/install/agent-bootstrap-metadata", adminAPIKeyAuth, enabledModule.AgentInstallBootstrapMetadata)
 		api.POST("/modules/install/agent-bootstrap-token", adminAPIKeyAuth, enabledModule.RotateAgentBootstrapToken)
 		api.POST("/modules/install", adminAPIKeyAuth, enabledModule.Install)

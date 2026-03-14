@@ -1,18 +1,14 @@
 package response
 
 type ModuleInstallResult struct {
-	ModuleName      string   `json:"module_name"`
-	Scope           string   `json:"scope"`
-	Endpoint        string   `json:"endpoint"`
-	EndpointValue   string   `json:"endpoint_value"`
-	InstallExecuted bool     `json:"install_executed"`
-	InstallOutput   string   `json:"install_output"`
-	InstallExitCode int      `json:"install_exit_code"`
-	HostsUpdated    []string `json:"hosts_updated"`
-	Warnings        []string `json:"warnings"`
-
-	SchemaKey       string   `json:"schema_key"`
-	SchemaName      string   `json:"schema_name"`
-	MigrationFiles  []string `json:"migration_files"`
-	MigrationSource string   `json:"migration_source"`
+	OperationID      string   `json:"operation_id,omitempty"`
+	ModuleName       string   `json:"module_name"`
+	AgentID          string   `json:"agent_id,omitempty"`
+	Version          string   `json:"version,omitempty"`
+	ArtifactChecksum string   `json:"artifact_checksum,omitempty"`
+	ServiceName      string   `json:"service_name,omitempty"`
+	Endpoint         string   `json:"endpoint"`
+	Health           string   `json:"health,omitempty"`
+	HostsUpdated     []string `json:"hosts_updated"`
+	Warnings         []string `json:"warnings"`
 }

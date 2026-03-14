@@ -73,22 +73,14 @@ func installModuleTLSOnTarget(
 	certB64 := base64.StdEncoding.EncodeToString(bundle.CertPEM)
 	keyB64 := base64.StdEncoding.EncodeToString(bundle.KeyPEM)
 	caB64 := base64.StdEncoding.EncodeToString(bundle.CAPEM)
-	sudoPasswordB64 := ""
-	if target.SudoPassword != nil {
-		sudoPasswordB64 = base64.StdEncoding.EncodeToString([]byte(*target.SudoPassword))
-	}
 
 	ownerUser := "aurora"
 	ownerGroup := "aurora"
 	script := strings.Join([]string{
 		"set -e",
-		"sudo_pw_b64=" + shellEscape(sudoPasswordB64),
-		`sudo_pw=""`,
-		`if [ -n "$sudo_pw_b64" ]; then sudo_pw="$(printf '%s' "$sudo_pw_b64" | base64 -d 2>/dev/null || true)"; fi`,
 		`ensure_root(){`,
 		`  if [ "$(id -u)" -eq 0 ]; then "$@"; return; fi`,
 		`  if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then sudo -n "$@"; return; fi`,
-		`  if command -v sudo >/dev/null 2>&1 && [ -n "$sudo_pw" ]; then printf '%s\n' "$sudo_pw" | sudo -S -k "$@"; return $?; fi`,
 		`  if "$@" >/dev/null 2>&1; then return; fi`,
 		`  echo "need root or sudo to write tls files under /etc/aurora/certs" >&2`,
 		`  exit 1`,
@@ -131,16 +123,9 @@ func moduleTLSExistsOnTarget(
 	moduleName string,
 ) (bool, string, error) {
 	paths := resolveModuleTLSPaths(moduleName)
-	sudoPasswordB64 := ""
-	if target.SudoPassword != nil {
-		sudoPasswordB64 = base64.StdEncoding.EncodeToString([]byte(*target.SudoPassword))
-	}
 
 	script := strings.Join([]string{
 		"set -e",
-		"sudo_pw_b64=" + shellEscape(sudoPasswordB64),
-		`sudo_pw=""`,
-		`if [ -n "$sudo_pw_b64" ]; then sudo_pw="$(printf '%s' "$sudo_pw_b64" | base64 -d 2>/dev/null || true)"; fi`,
 		"cert_path=" + shellEscape(paths.CertPath),
 		"key_path=" + shellEscape(paths.KeyPath),
 		"ca_path=" + shellEscape(paths.CAPath),
@@ -148,7 +133,6 @@ func moduleTLSExistsOnTarget(
 		`  path="$1"`,
 		`  if [ -f "$path" ]; then return 0; fi`,
 		`  if command -v sudo >/dev/null 2>&1 && sudo -n test -f "$path" >/dev/null 2>&1; then return 0; fi`,
-		`  if command -v sudo >/dev/null 2>&1 && [ -n "$sudo_pw" ]; then printf '%s\n' "$sudo_pw" | sudo -S -k test -f "$path" >/dev/null 2>&1; return $?; fi`,
 		`  return 1`,
 		`}`,
 		`missing=""`,

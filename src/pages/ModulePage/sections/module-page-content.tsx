@@ -125,10 +125,11 @@ export function ModulePageContent({
               />
             </div>
             <div className="flex items-center gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={onRefresh}>
+              <Button type="button" variant="outline" size="sm" onClick={onRefresh} disabled={actionRunning}>
                 Refresh
               </Button>
               <Badge variant="outline">{filteredCards.length} items</Badge>
+              {actionRunning ? <Badge variant="outline">Operation Running</Badge> : null}
             </div>
           </div>
 
@@ -212,10 +213,10 @@ export function ModulePageContent({
               <code>{agentInstallScript}</code>
             </pre>
             <div className="flex flex-wrap items-center gap-2">
-              <Button type="button" size="sm" onClick={handleRotateToken}>
-                <KeyRound className="mr-1 h-3.5 w-3.5" />
-                Get Bootstrap Token
-              </Button>
+                <Button type="button" size="sm" onClick={handleRotateToken} disabled={actionRunning}>
+                  <KeyRound className="mr-1 h-3.5 w-3.5" />
+                  Get Bootstrap Token
+                </Button>
               <p className={cn("text-xs", textMuted)}>
                 {agentBootstrapToken.trim() ? "Token da cap nhat vao script install." : "Chua co bootstrap token. Bam nut de tao token moi."}
               </p>
@@ -234,7 +235,7 @@ export function ModulePageContent({
                 />
               </div>
               <div className="flex items-center gap-2">
-                <Button type="button" variant="outline" size="sm" onClick={onRefreshAgents} disabled={installAgentsLoading}>
+                <Button type="button" variant="outline" size="sm" onClick={onRefreshAgents} disabled={installAgentsLoading || actionRunning}>
                   <RefreshCw className={cn("mr-1 h-3.5 w-3.5", installAgentsLoading && "animate-spin")} />
                   Refresh Agent
                 </Button>

@@ -102,11 +102,7 @@ type RedisCfg struct {
 }
 
 type ModuleInstallCfg struct {
-	UMSInstallScriptURL      string
-	PlatformInstallScriptURL string
-	PaaSInstallScriptURL     string
-	DBaaSInstallScriptURL    string
-	UIInstallScriptURL       string
+	UILegacyInstallScriptURL string
 }
 type Config struct {
 	App           AppCfg
@@ -177,11 +173,7 @@ func LoadConfig() *Config {
 			InsecureSkipVerify: getEnvAsBool("REDIS_TLS_INSECURE", false),
 		},
 		ModuleInstall: ModuleInstallCfg{
-			UMSInstallScriptURL:      "https://raw.githubusercontent.com/phucle996/aurora-ums/main/install/install.sh",
-			PlatformInstallScriptURL: "https://raw.githubusercontent.com/phucle996/aurora-platform-resource/main/install/install.sh",
-			PaaSInstallScriptURL:     "https://raw.githubusercontent.com/phucle996/aurora-paas-service/main/install/install.sh",
-			DBaaSInstallScriptURL:    "https://raw.githubusercontent.com/phucle996/aurora-dbaas-module/main/install/install.sh",
-			UIInstallScriptURL:       "https://raw.githubusercontent.com/phucle996/aurora-ui/main/install/install.sh",
+			UILegacyInstallScriptURL: "https://raw.githubusercontent.com/phucle996/aurora-ui/main/install/install.sh",
 		},
 		APIKey: APIKeyCfg{
 			Prefix:         keycfg.APIKeyPrefix,

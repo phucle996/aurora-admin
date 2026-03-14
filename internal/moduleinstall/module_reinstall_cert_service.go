@@ -12,17 +12,10 @@ type ModuleReinstallCertRequest struct {
 }
 
 type ModuleReinstallCertResult struct {
-	ModuleName string
-	Scope      string
-	Endpoint   string
-	TargetHost string
-	CertPath   string
-	KeyPath    string
-	CAPath     string
-	Warnings   []string
-
+	ModuleName        string
+	Endpoint          string
+	Warnings          []string
 	HealthcheckPassed bool
-	HealthcheckOutput string
 }
 
 func (s *ModuleInstallService) ReinstallCertWithLog(
@@ -47,17 +40,12 @@ func (s *ModuleInstallService) ReinstallCertWithLog(
 		return nil, errorvar.ErrModuleEndpointInvalid
 	}
 
-	tlsPaths := resolveModuleTLSPaths(moduleName)
 	result := &ModuleReinstallCertResult{
 		ModuleName: moduleName,
-		Scope:      target.Scope,
 		Endpoint:   endpoint,
-		TargetHost: target.Host,
-		CertPath:   tlsPaths.CertPath,
-		KeyPath:    tlsPaths.KeyPath,
-		CAPath:     tlsPaths.CAPath,
 		Warnings:   []string{},
 	}
+	tlsPaths := resolveModuleTLSPaths(moduleName)
 
 	appHost := endpointHost(endpoint)
 	if appHost == "" {
@@ -78,10 +66,9 @@ func (s *ModuleInstallService) ReinstallCertWithLog(
 	}
 	logInstall(logFn, "reinstall-cert", "tls materials reinstalled cert=%s key=%s ca=%s", tlsPaths.CertPath, tlsPaths.KeyPath, tlsPaths.CAPath)
 
-	healthOutput, healthErr := ensureCurlAndCheckEndpoint(ctx, target, moduleName, endpoint, func(line string) {
+	_, healthErr := ensureCurlAndCheckEndpoint(ctx, target, moduleName, endpoint, func(line string) {
 		logInstall(logFn, "healthcheck", "%s", line)
 	})
-	result.HealthcheckOutput = strings.TrimSpace(healthOutput)
 	if healthErr != nil {
 		logInstall(logFn, "healthcheck", "[error] %v", healthErr)
 		return result, fmt.Errorf("service healthcheck failed after reinstall cert: %w", healthErr)
@@ -112,10 +99,6 @@ func (s *ModuleInstallService) resolveModuleTargetByEndpoint(
 			if endpoint == "" {
 				return moduleInstallTarget{}, "", errorvar.ErrModuleEndpointInvalid
 			}
-			target.Scope = normalizeScope(target.Scope)
-			if target.Scope == "" {
-				target.Scope = ModuleInstallScopeRemote
-			}
 			if strings.TrimSpace(target.Host) == "" {
 				target.Host = normalizeAddress(hostFromEndpoint(target.AgentGRPCEndpoint))
 			}
@@ -132,45 +115,4 @@ func (s *ModuleInstallService) resolveModuleTargetByEndpoint(
 	}
 
 	return moduleInstallTarget{}, "", errorvar.ErrModuleEndpointNotFound
-}
-
-func parseLegacyEndpointValue(raw string) string {
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return ""
-	}
-
-	if status, endpoint, ok := strings.Cut(value, ":"); ok {
-		if isKnownRuntimeStatus(status) {
-			return strings.TrimSpace(endpoint)
-		}
-	}
-
-	if strings.Contains(value, "://") {
-		return value
-	}
-	if endpointHost(value) != "" {
-		return value
-	}
-	return ""
-}
-
-func isKnownRuntimeStatus(raw string) bool {
-	status := strings.ToLower(strings.TrimSpace(raw))
-	switch status {
-	case "running",
-		"installed",
-		"installing",
-		"stopped",
-		"degraded",
-		"error",
-		"healthy",
-		"unhealthy",
-		"maintenance",
-		"not_installed",
-		"unknown":
-		return true
-	default:
-		return false
-	}
 }

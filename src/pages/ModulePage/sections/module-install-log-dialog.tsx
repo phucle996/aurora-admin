@@ -2,6 +2,7 @@ import { CheckCircle2, Loader2, XCircle } from "lucide-react";
 
 import { SSHLiveTerminal } from "@/components/ssh-live-terminal";
 import { Button } from "@/components/ui/button";
+import type { ModuleInstallOperationSummary, ModuleInstallResult } from "@/hooks/module/use-module-install-api";
 import {
   Dialog,
   DialogContent,
@@ -17,6 +18,7 @@ type ModuleInstallLogDialogProps = {
   running: boolean;
   logs: string[];
   result: unknown | null;
+  operationSummary?: ModuleInstallOperationSummary | null;
   errorMessage: string;
   title?: string;
   description?: string;
@@ -28,12 +30,26 @@ export function ModuleInstallLogDialog({
   running,
   logs,
   result,
+  operationSummary,
   errorMessage,
   title,
   description,
   onOpenChange,
 }: ModuleInstallLogDialogProps) {
   const isSuccess = !running && !errorMessage && Boolean(result);
+  const installResult = (result && typeof result === "object" ? result : null) as ModuleInstallResult | null;
+
+  const summaryRows = [
+    { label: "Operation", value: operationSummary?.operation_id || installResult?.operation_id || "" },
+    { label: "Module", value: operationSummary?.module || installResult?.module_name || "" },
+    { label: "Agent", value: operationSummary?.agent_id || installResult?.agent_id || "" },
+    { label: "Version", value: operationSummary?.version || installResult?.version || "" },
+    { label: "Service", value: operationSummary?.service_name || installResult?.service_name || "" },
+    { label: "Endpoint", value: operationSummary?.endpoint || installResult?.endpoint || "" },
+    { label: "Health", value: operationSummary?.health || installResult?.health || "" },
+    { label: "Stage", value: operationSummary?.last_stage || "" },
+    { label: "Checksum", value: operationSummary?.artifact_checksum || installResult?.artifact_checksum || "" },
+  ].filter((item) => item.value);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -60,6 +76,16 @@ export function ModuleInstallLogDialog({
         </DialogHeader>
 
         <section className="space-y-3">
+          {summaryRows.length > 0 ? (
+            <div className="grid gap-2 rounded-md border p-3 text-xs sm:grid-cols-2">
+              {summaryRows.map((item) => (
+                <div key={item.label} className="space-y-1">
+                  <p className="text-muted-foreground">{item.label}</p>
+                  <p className="break-all font-medium">{item.value}</p>
+                </div>
+              ))}
+            </div>
+          ) : null}
           <SSHLiveTerminal logs={logs} running={running} />
         </section>
 

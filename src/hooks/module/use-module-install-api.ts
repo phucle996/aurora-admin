@@ -1,19 +1,9 @@
 import { resolveAdminBaseURL } from "@/lib/admin-auth";
 
-export type ModuleInstallScope = "remote";
-
 export type ModuleInstallPayload = {
   module_name: string;
-  scope: ModuleInstallScope;
-  install_runtime?: "linux" | "k8s";
-  agent_id?: string;
+  agent_id: string;
   app_host: string;
-  app_port?: number;
-  endpoint?: string;
-  install_command?: string;
-  kubeconfig?: string;
-  kubeconfig_path?: string;
-  sudo_password?: string;
 };
 
 export type ModuleInstallAgent = {
@@ -36,19 +26,44 @@ export type AgentInstallBootstrapMetadata = {
 };
 
 export type ModuleInstallResult = {
+  operation_id?: string;
   module_name: string;
-  scope: string;
+  agent_id?: string;
+  version?: string;
+  artifact_checksum?: string;
+  service_name?: string;
   endpoint: string;
-  endpoint_value: string;
-  install_executed: boolean;
-  install_output: string;
-  install_exit_code: number;
+  health?: string;
   hosts_updated: string[];
   warnings: string[];
-  schema_key: string;
-  schema_name: string;
-  migration_files: string[];
-  migration_source: string;
+};
+
+export type ModuleInstallOperationSummary = {
+  operation_id: string;
+  agent_id: string;
+  module: string;
+  version: string;
+  service_name: string;
+  artifact_checksum: string;
+  app_host: string;
+  endpoint: string;
+  status: string;
+  health: string;
+  last_stage: string;
+  last_message: string;
+  error_text: string;
+  started_at: string;
+  updated_at: string;
+  completed_at: string;
+};
+
+export type ModuleInstallOperationEvent = {
+  operation_id: string;
+  sequence: number;
+  type: string;
+  stage: string;
+  message: string;
+  observed_at: string;
 };
 
 export type ModuleReinstallCertPayload = {
@@ -57,15 +72,9 @@ export type ModuleReinstallCertPayload = {
 
 export type ModuleReinstallCertResult = {
   module_name: string;
-  scope: string;
   endpoint: string;
-  target_host: string;
-  cert_path: string;
-  key_path: string;
-  ca_path: string;
   warnings: string[];
   healthcheck_passed: boolean;
-  healthcheck_output: string;
 };
 
 type ModuleInstallApiResponse = {
@@ -212,19 +221,16 @@ export async function getAgentInstallBootstrapMetadata(): Promise<AgentInstallBo
 function parseModuleInstallResult(raw: unknown): ModuleInstallResult {
   const row = (raw ?? {}) as Record<string, unknown>;
   return {
+    operation_id: toStringValue(row.operation_id) || undefined,
     module_name: toStringValue(row.module_name),
-    scope: toStringValue(row.scope),
+    agent_id: toStringValue(row.agent_id) || undefined,
+    version: toStringValue(row.version) || undefined,
+    artifact_checksum: toStringValue(row.artifact_checksum) || undefined,
+    service_name: toStringValue(row.service_name) || undefined,
     endpoint: toStringValue(row.endpoint),
-    endpoint_value: toStringValue(row.endpoint_value),
-    install_executed: Boolean(row.install_executed),
-    install_output: toStringValue(row.install_output),
-    install_exit_code: toNumberValue(row.install_exit_code),
+    health: toStringValue(row.health) || undefined,
     hosts_updated: toStringList(row.hosts_updated),
     warnings: toStringList(row.warnings),
-    schema_key: toStringValue(row.schema_key),
-    schema_name: toStringValue(row.schema_name),
-    migration_files: toStringList(row.migration_files),
-    migration_source: toStringValue(row.migration_source),
   };
 }
 
@@ -232,15 +238,82 @@ function parseModuleReinstallCertResult(raw: unknown): ModuleReinstallCertResult
   const row = (raw ?? {}) as Record<string, unknown>;
   return {
     module_name: toStringValue(row.module_name),
-    scope: toStringValue(row.scope),
     endpoint: toStringValue(row.endpoint),
-    target_host: toStringValue(row.target_host),
-    cert_path: toStringValue(row.cert_path),
-    key_path: toStringValue(row.key_path),
-    ca_path: toStringValue(row.ca_path),
     warnings: toStringList(row.warnings),
     healthcheck_passed: Boolean(row.healthcheck_passed),
-    healthcheck_output: toStringValue(row.healthcheck_output),
+  };
+}
+
+function parseModuleInstallOperationSummary(raw: unknown): ModuleInstallOperationSummary {
+  const row = (raw ?? {}) as Record<string, unknown>;
+  return {
+    operation_id: toStringValue(row.operation_id),
+    agent_id: toStringValue(row.agent_id),
+    module: toStringValue(row.module),
+    version: toStringValue(row.version),
+    service_name: toStringValue(row.service_name),
+    artifact_checksum: toStringValue(row.artifact_checksum),
+    app_host: toStringValue(row.app_host),
+    endpoint: toStringValue(row.endpoint),
+    status: toStringValue(row.status),
+    health: toStringValue(row.health),
+    last_stage: toStringValue(row.last_stage),
+    last_message: toStringValue(row.last_message),
+    error_text: toStringValue(row.error_text),
+    started_at: toStringValue(row.started_at),
+    updated_at: toStringValue(row.updated_at),
+    completed_at: toStringValue(row.completed_at),
+  };
+}
+
+function parseModuleInstallOperationEvent(raw: unknown): ModuleInstallOperationEvent {
+  const row = (raw ?? {}) as Record<string, unknown>;
+  return {
+    operation_id: toStringValue(row.operation_id),
+    sequence: toNumberValue(row.sequence),
+    type: toStringValue(row.type),
+    stage: toStringValue(row.stage),
+    message: toStringValue(row.message),
+    observed_at: toStringValue(row.observed_at),
+  };
+}
+
+export async function getModuleInstallOperation(operationID: string): Promise<{
+  summary: ModuleInstallOperationSummary;
+  events: ModuleInstallOperationEvent[];
+}> {
+  const baseURL = resolveAdminBaseURL();
+  const path = `/api/v1/modules/install/operations/${encodeURIComponent(operationID)}`;
+  const url = baseURL ? new URL(path, baseURL).toString() : path;
+
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+    },
+    credentials: "include",
+  });
+
+  const text = await res.text();
+  let parsed: ModuleInstallApiResponse | null = null;
+  try {
+    parsed = JSON.parse(text) as ModuleInstallApiResponse;
+  } catch {
+    parsed = null;
+  }
+
+  if (!res.ok) {
+    const detail = toStringValue(parsed?.message ?? parsed?.error) || toSingleLine(text);
+    throw new Error(
+      `Load install operation failed (HTTP ${res.status} ${res.statusText}): ${detail || "empty response"}`,
+    );
+  }
+
+  const body = (parsed?.data ?? {}) as Record<string, unknown>;
+  const rows = Array.isArray(body.events) ? body.events : [];
+  return {
+    summary: parseModuleInstallOperationSummary(body.summary),
+    events: rows.map((item) => parseModuleInstallOperationEvent(item)),
   };
 }
 

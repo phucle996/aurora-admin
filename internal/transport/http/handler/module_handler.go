@@ -2,6 +2,7 @@ package handler
 
 import (
 	installsvc "admin/internal/moduleinstall"
+	runtimesvc "admin/internal/runtime/service"
 	"admin/internal/service"
 	reqdto "admin/internal/transport/http/handler/dto/request"
 	resdto "admin/internal/transport/http/handler/dto/response"
@@ -25,7 +26,7 @@ import (
 type EnabledModuleHandler struct {
 	Svc       *service.EnabledModuleService
 	InstallSv *installsvc.ModuleInstallService
-	RuntimeSv *service.RuntimeBootstrapService
+	RuntimeSv *runtimesvc.RuntimeBootstrapService
 	AppPort   int
 }
 
@@ -38,7 +39,7 @@ const (
 func NewEnabledModuleHandler(
 	svc *service.EnabledModuleService,
 	installSvc *installsvc.ModuleInstallService,
-	runtimeSvc *service.RuntimeBootstrapService,
+	runtimeSvc *runtimesvc.RuntimeBootstrapService,
 	appPort int,
 ) *EnabledModuleHandler {
 	return &EnabledModuleHandler{
@@ -114,25 +115,15 @@ func (h *EnabledModuleHandler) Install(c *gin.Context) {
 	defer cancel()
 
 	result, err := h.InstallSv.InstallWithLog(ctx, installsvc.ModuleInstallRequest{
-		ModuleName:     moduleName,
-		Scope:          req.Scope,
-		InstallRuntime: req.InstallRuntime,
-		AgentID:        req.AgentID,
-		AppHost:        req.AppHost,
-		AppPort:        req.AppPort,
-		Endpoint:       req.Endpoint,
-		InstallCommand: req.InstallCommand,
-		Kubeconfig:     req.Kubeconfig,
-		KubeconfigPath: req.KubeconfigPath,
-		SudoPassword:   normalizeOptionalSecret(req.SudoPassword),
+		ModuleName: moduleName,
+		AgentID:    req.AgentID,
+		AppHost:    req.AppHost,
 	}, nil)
 	if err != nil {
 		switch {
 		case errors.Is(err, errorvar.ErrModuleInstallServiceNil):
 			response.RespondServiceUnavailable(c, err.Error())
 		case errors.Is(err, errorvar.ErrModuleNameInvalid),
-			errors.Is(err, errorvar.ErrModuleInstallScope),
-			errors.Is(err, errorvar.ErrModuleInstallCommand),
 			errors.Is(err, errorvar.ErrModuleInstallerMissing),
 			errors.Is(err, errorvar.ErrEndpointNameInvalid):
 			response.RespondBadRequest(c, err.Error())
@@ -225,17 +216,9 @@ func (h *EnabledModuleHandler) InstallStream(c *gin.Context) {
 	defer stopHeartbeat()
 
 	result, err := h.InstallSv.InstallWithLog(ctx, installsvc.ModuleInstallRequest{
-		ModuleName:     moduleName,
-		Scope:          req.Scope,
-		InstallRuntime: req.InstallRuntime,
-		AgentID:        req.AgentID,
-		AppHost:        req.AppHost,
-		AppPort:        req.AppPort,
-		Endpoint:       req.Endpoint,
-		InstallCommand: req.InstallCommand,
-		Kubeconfig:     req.Kubeconfig,
-		KubeconfigPath: req.KubeconfigPath,
-		SudoPassword:   normalizeOptionalSecret(req.SudoPassword),
+		ModuleName: moduleName,
+		AgentID:    req.AgentID,
+		AppHost:    req.AppHost,
 	}, func(stage, message string) {
 		_ = emitEvent("log", stage, message, nil)
 	})
@@ -279,6 +262,32 @@ func (h *EnabledModuleHandler) InstallAgents(c *gin.Context) {
 		"items": output,
 		"count": len(output),
 	}, "module install agent list")
+}
+
+func (h *EnabledModuleHandler) InstallOperation(c *gin.Context) {
+	if h == nil || h.InstallSv == nil {
+		response.RespondServiceUnavailable(c, "module install service unavailable")
+		return
+	}
+	operationID := strings.TrimSpace(c.Param("operation_id"))
+	if operationID == "" {
+		response.RespondBadRequest(c, "operation_id is required")
+		return
+	}
+
+	summary, events, err := h.InstallSv.GetInstallOperation(c.Request.Context(), operationID)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			response.RespondNotFound(c, err.Error())
+			return
+		}
+		response.RespondInternalError(c, err.Error())
+		return
+	}
+	response.RespondSuccess(c, gin.H{
+		"summary": summary,
+		"events":  events,
+	}, "module install operation")
 }
 
 func (h *EnabledModuleHandler) RotateAgentBootstrapToken(c *gin.Context) {
@@ -487,17 +496,6 @@ func (h *EnabledModuleHandler) ReinstallCertStream(c *gin.Context) {
 	_ = emitEvent("result", "service", "module cert reinstalled", buildModuleReinstallCertResponse(*result))
 }
 
-func normalizeOptionalSecret(raw *string) *string {
-	if raw == nil {
-		return nil
-	}
-	trimmed := strings.TrimSpace(*raw)
-	if trimmed == "" {
-		return nil
-	}
-	return &trimmed
-}
-
 func startSSEHeartbeat(
 	ctx context.Context,
 	w gin.ResponseWriter,
@@ -543,33 +541,24 @@ func startSSEHeartbeat(
 
 func buildModuleInstallResponse(item installsvc.ModuleInstallResult) resdto.ModuleInstallResult {
 	return resdto.ModuleInstallResult{
-		ModuleName:      item.ModuleName,
-		Scope:           item.Scope,
-		Endpoint:        item.Endpoint,
-		EndpointValue:   item.EndpointValue,
-		InstallExecuted: item.InstallExecuted,
-		InstallOutput:   item.InstallOutput,
-		InstallExitCode: item.InstallExitCode,
-		HostsUpdated:    item.HostsUpdated,
-		Warnings:        item.Warnings,
-		SchemaKey:       item.SchemaKey,
-		SchemaName:      item.SchemaName,
-		MigrationFiles:  item.MigrationFiles,
-		MigrationSource: item.MigrationSource,
+		OperationID:      item.OperationID,
+		ModuleName:       item.ModuleName,
+		AgentID:          item.AgentID,
+		Version:          item.Version,
+		ArtifactChecksum: item.ArtifactChecksum,
+		ServiceName:      item.ServiceName,
+		Endpoint:         item.Endpoint,
+		Health:           item.Health,
+		HostsUpdated:     item.HostsUpdated,
+		Warnings:         item.Warnings,
 	}
 }
 
 func buildModuleReinstallCertResponse(item installsvc.ModuleReinstallCertResult) resdto.ModuleReinstallCertResult {
 	return resdto.ModuleReinstallCertResult{
 		ModuleName:        item.ModuleName,
-		Scope:             item.Scope,
 		Endpoint:          item.Endpoint,
-		TargetHost:        item.TargetHost,
-		CertPath:          item.CertPath,
-		KeyPath:           item.KeyPath,
-		CAPath:            item.CAPath,
 		Warnings:          item.Warnings,
 		HealthcheckPassed: item.HealthcheckPassed,
-		HealthcheckOutput: item.HealthcheckOutput,
 	}
 }

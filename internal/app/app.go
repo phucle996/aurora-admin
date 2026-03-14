@@ -2,7 +2,8 @@ package app
 
 import (
 	"admin/internal/config"
-	grpcTransport "admin/internal/transport/grpc"
+	runtimegrpc "admin/internal/runtime/transport/grpc"
+	certgrpc "admin/internal/transport/grpc"
 	"admin/internal/transport/http/handler"
 	"admin/internal/transport/http/middleware"
 	"admin/pkg/logger"
@@ -70,17 +71,20 @@ func NewApplication(cfg *config.Config) (*App, error) {
 	RegisterFrontendSPA(router)
 
 	grpcServer := grpc.NewServer()
-	grpcTransport.RegisterCertTransportServer(
+	certgrpc.RegisterCertTransportServer(
 		grpcServer,
-		grpcTransport.NewCertTransportService(modules.CertStoreSvc),
+		certgrpc.NewCertTransportService(modules.CertStoreSvc),
 	)
-	grpcTransport.RegisterRuntimeTransportServer(
+	runtimegrpc.RegisterRuntimeTransportServer(
 		grpcServer,
-		grpcTransport.NewRuntimeTransportService(modules.RuntimeSvc),
+		runtimegrpc.NewRuntimeTransportService(modules.RuntimeSvc),
 	)
 
 	go modules.TokenSecretSvc.StartAutoRotate(ctx, time.Minute, func(err error) {
 		logger.SysWarn("token.secret.rotate", "auto rotate failed: %v", err)
+	})
+	modules.ModuleInstallSvc.StartActualStateReconcileLoop(ctx, time.Minute, func(err error) {
+		logger.SysWarn("module.install.reconcile", "actual install state reconcile failed: %v", err)
 	})
 
 	health.MarkReady()

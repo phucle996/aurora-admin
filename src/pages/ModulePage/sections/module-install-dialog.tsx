@@ -50,6 +50,7 @@ export function ModuleInstallDialog({
   const selectedAgent = installAgents.find((item) => item.agent_id === selectedAgentID) ?? null;
   const selectedAgentStatus = (selectedAgent?.status || "").toLowerCase();
   const selectedAgentConnected = selectedAgentStatus === "connected";
+  const installDisabled = installSubmitting || !selectedAgentConnected || !selectedAgentID.trim();
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -116,6 +117,12 @@ export function ModuleInstallDialog({
               <p>grpc: {selectedAgent.agent_grpc_endpoint || "-"}</p>
             </div>
           ) : null}
+
+          {!selectedAgentConnected ? (
+            <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+              Agent phải ở trạng thái <span className="font-medium">connected</span> trước khi chạy install để tránh operation fail giữa chừng.
+            </p>
+          ) : null}
         </div>
 
         <DialogFooter>
@@ -130,7 +137,7 @@ export function ModuleInstallDialog({
           <Button
             type="button"
             onClick={onInstall}
-            disabled={installSubmitting}
+            disabled={installDisabled}
           >
             {installSubmitting ? "Installing..." : "Install"}
           </Button>

@@ -8,6 +8,8 @@ import (
 	keycfg "admin/internal/key"
 	installsvc "admin/internal/moduleinstall"
 	"admin/internal/repository"
+	runtimerepo "admin/internal/runtime/repository"
+	runtimesvc "admin/internal/runtime/service"
 	apisvc "admin/internal/service"
 	"admin/pkg/logger"
 	"context"
@@ -31,7 +33,7 @@ type Modules struct {
 	CertStoreSvc     *apisvc.CertStoreService
 	EnabledModuleSvc *apisvc.EnabledModuleService
 	ModuleInstallSvc *installsvc.ModuleInstallService
-	RuntimeSvc       *apisvc.RuntimeBootstrapService
+	RuntimeSvc       *runtimesvc.RuntimeBootstrapService
 }
 
 // NewModules assembles all infrastructure dependencies.
@@ -118,7 +120,9 @@ func NewModules(
 	})
 
 	enabledModuleRepo := repository.NewEtcdEndpointRepository(etcdClient, keycfg.EndpointPrefix)
-	runtimeRepo := repository.NewEtcdRuntimeConfigRepository(etcdClient, keycfg.RuntimePrefix)
+	runtimeRepo := runtimerepo.NewEtcdRuntimeConfigRepository(etcdClient, keycfg.RuntimePrefix)
+	runtimeEndpointRepo := newRuntimeEndpointRepository(enabledModuleRepo)
+	runtimeCertStoreRepo := newRuntimeCertStoreRepository(certStoreRepo)
 	enabledModuleSvc := apisvc.NewEnabledModuleService(enabledModuleRepo)
 	moduleInstallSvc := installsvc.NewModuleInstallService(
 		enabledModuleRepo,
@@ -129,24 +133,18 @@ func NewModules(
 		cfg.AgentMTLS.CACert,
 		cfg.AgentMTLS.AdminClientCert,
 		cfg.AgentMTLS.AdminClientKey,
-		map[string]string{
-			"ums":      cfg.ModuleInstall.UMSInstallScriptURL,
-			"platform": cfg.ModuleInstall.PlatformInstallScriptURL,
-			"paas":     cfg.ModuleInstall.PaaSInstallScriptURL,
-			"dbaas":    cfg.ModuleInstall.DBaaSInstallScriptURL,
-			"ui":       cfg.ModuleInstall.UIInstallScriptURL,
-		},
+		cfg.ModuleInstall.UILegacyInstallScriptURL,
 	)
-	runtimeSvc := apisvc.NewRuntimeBootstrapService(
+	runtimeSvc := runtimesvc.NewRuntimeBootstrapService(
 		runtimeRepo,
-		enabledModuleRepo,
-		certStoreRepo,
+		runtimeEndpointRepo,
+		runtimeCertStoreRepo,
 		cfg.CertStore.Prefix,
 		cfg.App.TLSCA,
 		cfg.AgentMTLS.CACert,
 		cfg.AgentMTLS.CAKey,
 	)
-	if err := runtimeSvc.SeedControlPlaneTrustStore(ctx, apisvc.ControlPlaneTrustSeedInput{
+	if err := runtimeSvc.SeedControlPlaneTrustStore(ctx, runtimesvc.ControlPlaneTrustSeedInput{
 		AdminCACertPath:           cfg.App.TLSCA,
 		AdminServerCertPath:       cfg.App.TLSCert,
 		AgentCACertPath:           cfg.AgentMTLS.CACert,

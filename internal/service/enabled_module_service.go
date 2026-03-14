@@ -1,6 +1,7 @@
 package service
 
 import (
+	"admin/internal/endpointmeta"
 	"admin/internal/repository"
 	"admin/pkg/errorvar"
 	"context"
@@ -139,14 +140,14 @@ func parseModuleValue(raw string) (status string, endpoint string, installed boo
 		return "not_installed", "", false
 	}
 
-	if metaScope, endpointValue, ok := parseEndpointValueWithScope(value); ok {
-		if endpointValue == "" {
+	if parsed := endpointmeta.Parse(value); parsed.HasMetadata {
+		if parsed.Endpoint == "" {
 			return "not_installed", "", false
 		}
-		if metaScope == "remote" {
-			return "installed", endpointValue, true
+		if parsed.Scope == "remote" {
+			return "installed", parsed.Endpoint, true
 		}
-		return "running", endpointValue, true
+		return "running", parsed.Endpoint, true
 	}
 
 	left, right, ok := strings.Cut(value, ":")
@@ -163,22 +164,6 @@ func parseModuleValue(raw string) (status string, endpoint string, installed boo
 
 	// Backward compatibility with legacy values that store endpoint only.
 	return "installed", value, true
-}
-
-func parseEndpointValueWithScope(value string) (scope string, endpoint string, ok bool) {
-	scopeRaw, rest, hasScope := strings.Cut(value, "(")
-	if !hasScope {
-		return "", "", false
-	}
-	scopeNorm := normalizeStatus(scopeRaw)
-	if scopeNorm != "local" && scopeNorm != "remote" {
-		return "", "", false
-	}
-	_, endpointPart, hasEndpoint := strings.Cut(rest, "):")
-	if !hasEndpoint {
-		return "", "", false
-	}
-	return scopeNorm, strings.TrimSpace(endpointPart), true
 }
 
 func normalizeStatus(raw string) string {

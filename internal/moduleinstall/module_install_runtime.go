@@ -1,11 +1,10 @@
 package moduleinstall
 
 import (
-	"admin/pkg/errorvar"
+	"admin/internal/endpointmeta"
 	pkgutils "admin/pkg/utils"
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"fmt"
 	"math/big"
 	"net/url"
@@ -44,35 +43,6 @@ func runCommandOnTarget(
 	return "", -1, fmt.Errorf("agent endpoint is required")
 }
 
-func buildInstallTarget(scope string, req ModuleInstallRequest) (moduleInstallTarget, error) {
-	target := moduleInstallTarget{
-		Scope:          scope,
-		InstallRuntime: normalizeInstallRuntime(req.InstallRuntime),
-	}
-
-	switch scope {
-	case ModuleInstallScopeRemote:
-		target.AgentID = normalizeInstallAgentID(req.AgentID)
-		target.AgentGRPCEndpoint = normalizeAgentGRPCEndpoint(req.AgentGRPCEndpoint)
-		target.Kubeconfig = strings.TrimSpace(req.Kubeconfig)
-		target.KubeconfigPath = strings.TrimSpace(req.KubeconfigPath)
-		target.Host = normalizeAddress(req.TargetHost)
-		target.SudoPassword = normalizeOptionalSecret(req.SudoPassword)
-		if target.AgentGRPCEndpoint == "" {
-			return target, fmt.Errorf("agent endpoint is required for remote install")
-		}
-		if target.Host == "" {
-			target.Host = hostFromEndpoint(target.AgentGRPCEndpoint)
-		}
-		if target.Host == "" {
-			target.Host = "agent-target"
-		}
-		return target, nil
-	default:
-		return target, errorvar.ErrModuleInstallScope
-	}
-}
-
 func normalizeAgentGRPCEndpoint(raw string) string {
 	value := strings.TrimSpace(raw)
 	if value == "" {
@@ -91,7 +61,7 @@ func normalizeAgentGRPCEndpoint(raw string) string {
 func encodeEndpointValue(target moduleInstallTarget, endpoint string) string {
 	return fmt.Sprintf(
 		"%s(%s|%s|%s):%s",
-		target.Scope,
+		ModuleInstallScopeRemote,
 		target.AgentID,
 		target.AgentGRPCEndpoint,
 		target.Host,
@@ -100,101 +70,33 @@ func encodeEndpointValue(target moduleInstallTarget, endpoint string) string {
 }
 
 func parseEndpointTargetAndEndpoint(raw string) (moduleInstallTarget, string, bool) {
-	value := strings.TrimSpace(raw)
-	var out moduleInstallTarget
-	if value == "" {
-		return out, "", false
+	parsed := endpointmeta.Parse(raw)
+	if !parsed.HasMetadata || strings.EqualFold(strings.TrimSpace(parsed.Scope), ModuleInstallScopeRemote) == false {
+		return moduleInstallTarget{}, "", false
 	}
-
-	scope, remainder, ok := strings.Cut(value, "(")
-	if !ok {
-		return out, "", false
+	target := moduleInstallTarget{
+		AgentID:           strings.TrimSpace(parsed.AgentID),
+		AgentGRPCEndpoint: normalizeAgentGRPCEndpoint(parsed.AgentGRPCEndpoint),
+		Host:              normalizeAddress(parsed.Host),
 	}
-	scope = normalizeScope(scope)
-	if scope != ModuleInstallScopeRemote {
-		return out, "", false
+	if target.Host == "" {
+		target.Host = hostFromEndpoint(target.AgentGRPCEndpoint)
 	}
-
-	meta, endpoint, ok := strings.Cut(remainder, "):")
-	if !ok {
-		return out, "", false
+	if target.Host == "" {
+		target.Host = "agent-target"
 	}
-	parts := strings.Split(meta, "|")
-	if len(parts) == 3 {
-		out.Scope = scope
-		out.AgentID = strings.TrimSpace(parts[0])
-		out.AgentGRPCEndpoint = normalizeAgentGRPCEndpoint(parts[1])
-		out.Host = normalizeAddress(parts[2])
-		if out.Host == "" {
-			out.Host = hostFromEndpoint(out.AgentGRPCEndpoint)
-		}
-		if out.Host == "" {
-			out.Host = "agent-target"
-		}
-		if out.AgentGRPCEndpoint == "" {
-			return moduleInstallTarget{}, "", false
-		}
-		return out, strings.TrimSpace(endpoint), true
+	if target.AgentGRPCEndpoint == "" {
+		return moduleInstallTarget{}, "", false
 	}
-
-	// Backward compatibility for older endpoint metadata:
-	// remote(agent_id|grpc_endpoint|username|host|port):endpoint
-	if len(parts) >= 4 {
-		out.Scope = scope
-		out.AgentID = strings.TrimSpace(parts[0])
-		out.AgentGRPCEndpoint = normalizeAgentGRPCEndpoint(parts[1])
-		out.Host = normalizeAddress(parts[3])
-		if out.Host == "" {
-			out.Host = hostFromEndpoint(out.AgentGRPCEndpoint)
-		}
-		if out.Host == "" {
-			out.Host = "agent-target"
-		}
-		if out.AgentGRPCEndpoint == "" {
-			return moduleInstallTarget{}, "", false
-		}
-		return out, strings.TrimSpace(endpoint), true
-	}
-
-	return moduleInstallTarget{}, "", false
+	return target, strings.TrimSpace(parsed.Endpoint), true
 }
 
 func resolveEndpointFromStoredValue(raw string) string {
-	if _, endpoint, ok := parseEndpointTargetAndEndpoint(raw); ok {
-		return strings.TrimSpace(endpoint)
-	}
-	return strings.TrimSpace(parseLegacyEndpointValue(raw))
-}
-
-func normalizeOptionalSecret(v *string) *string {
-	if v == nil {
-		return nil
-	}
-	trimmed := strings.TrimSpace(*v)
-	if trimmed == "" {
-		return nil
-	}
-	return &trimmed
+	return strings.TrimSpace(endpointmeta.ExtractEndpoint(raw))
 }
 
 func normalizeAddress(raw string) string {
 	return pkgutils.NormalizeAddress(raw)
-}
-
-func normalizeScope(raw string) string {
-	return strings.ToLower(strings.TrimSpace(raw))
-}
-
-func normalizeInstallRuntime(raw string) string {
-	value := strings.ToLower(strings.TrimSpace(raw))
-	switch value {
-	case "", ModuleInstallRuntimeLinux:
-		return ModuleInstallRuntimeLinux
-	case ModuleInstallRuntimeK8s:
-		return ModuleInstallRuntimeK8s
-	default:
-		return ModuleInstallRuntimeLinux
-	}
 }
 
 func normalizeModuleName(raw string) string {
@@ -205,10 +107,7 @@ func normalizeModuleName(raw string) string {
 	return value
 }
 
-func resolveInstallEndpoint(scope string, appHost string, appPort int32, fallbackEndpoint string) (string, int32, error) {
-	if normalizeScope(scope) != ModuleInstallScopeRemote {
-		return "", 0, errorvar.ErrModuleInstallScope
-	}
+func resolveInstallEndpoint(appHost string) (string, int32, error) {
 	host := normalizeAddress(appHost)
 	if host == "" {
 		return "", 0, fmt.Errorf("app_host is invalid")
@@ -217,42 +116,12 @@ func resolveInstallEndpoint(scope string, appHost string, appPort int32, fallbac
 		return "", 0, fmt.Errorf("app_host is invalid")
 	}
 
-	port := int32(0)
-	switch {
-	case appPort > 0:
-		if appPort > 65535 {
-			return "", 0, fmt.Errorf("app_port is invalid")
-		}
-		port = appPort
-	case appPort < 0:
-		return "", 0, fmt.Errorf("app_port is invalid")
-	default:
-		if parsed := parsePortFromEndpoint(fallbackEndpoint); parsed > 0 {
-			port = parsed
-		}
-	}
-
-	if port == 0 {
-		randomPort, err := randomInstallPort()
-		if err != nil {
-			return "", 0, fmt.Errorf("generate random app_port failed: %w", err)
-		}
-		port = randomPort
+	port, err := randomInstallPort()
+	if err != nil {
+		return "", 0, fmt.Errorf("generate random app_port failed: %w", err)
 	}
 
 	return host, port, nil
-}
-
-func parsePortFromEndpoint(raw string) int32 {
-	portRaw := strings.TrimSpace(endpointPort(raw))
-	if portRaw == "" {
-		return 0
-	}
-	portNum, err := strconv.Atoi(portRaw)
-	if err != nil || portNum <= 0 || portNum > 65535 {
-		return 0
-	}
-	return int32(portNum)
 }
 
 func randomInstallPort() (int32, error) {
@@ -268,7 +137,6 @@ func resolveInstallPortForTarget(
 	ctx context.Context,
 	target moduleInstallTarget,
 	candidate int32,
-	explicit bool,
 ) (int32, error) {
 	if candidate <= 0 || candidate > 65535 {
 		return 0, fmt.Errorf("invalid install app port")
@@ -280,9 +148,6 @@ func resolveInstallPortForTarget(
 	}
 	if available {
 		return candidate, nil
-	}
-	if explicit {
-		return 0, fmt.Errorf("requested app_port %d is already in use on target", candidate)
 	}
 
 	const maxAttempts = 32
@@ -336,59 +201,24 @@ func isTargetTCPPortAvailable(ctx context.Context, target moduleInstallTarget, p
 	return false, fmt.Errorf("check target port availability failed: %s", strings.Join(strings.Fields(detail), " "))
 }
 
-func buildDefaultModuleInstallCommand(
-	moduleName string,
+func buildDefaultUIInstallCommand(
 	scriptURL string,
 	appHost string,
 	appPort int32,
-	adminRPCEndpoint string,
 	uiEnvPath string,
-	sudoPassword *string,
 ) string {
 	args := []string{}
 	preRunSteps := []string{}
 	envAssignments := []string{}
 
-	switch canonicalModuleName(moduleName) {
-	case "ums":
-		args = append(args, "-r", "phucle996/aurora-ums")
-		if strings.TrimSpace(appHost) != "" {
-			args = append(args, "--app-host", strings.TrimSpace(appHost))
-		}
-		if appPort > 0 {
-			envAssignments = append(envAssignments, "AURORA_UMS_BACKEND_PORT="+shellEscape(strconv.Itoa(int(appPort))))
-		}
-		if strings.TrimSpace(adminRPCEndpoint) != "" {
-			args = append(args, "--admin-rpc-endpoint", strings.TrimSpace(adminRPCEndpoint))
-		}
-		preRunSteps = append(preRunSteps, `sed -i '/trap .* RETURN/d' "$tmp_script" || true`)
-	case "platform":
-		if strings.TrimSpace(adminRPCEndpoint) == "" {
-			return ""
-		}
-		args = append(args, "--admin-rpc-endpoint", strings.TrimSpace(adminRPCEndpoint))
-	case "paas":
-		if strings.TrimSpace(adminRPCEndpoint) == "" {
-			return ""
-		}
-		args = append(args, "--admin-rpc-endpoint", strings.TrimSpace(adminRPCEndpoint))
-	case "dbaas":
-		if strings.TrimSpace(adminRPCEndpoint) == "" {
-			return ""
-		}
-		args = append(args, "--admin-rpc-endpoint", strings.TrimSpace(adminRPCEndpoint))
-	case "ui":
-		if strings.TrimSpace(appHost) == "" || appPort <= 0 {
-			return ""
-		}
-		if strings.TrimSpace(uiEnvPath) != "" {
-			args = append(args, "--env-file", strings.TrimSpace(uiEnvPath))
-		}
-		args = append(args, "--app-host", strings.TrimSpace(appHost))
-		args = append(args, "--app-port", strconv.Itoa(int(appPort)))
-	default:
+	if strings.TrimSpace(appHost) == "" || appPort <= 0 {
 		return ""
 	}
+	if strings.TrimSpace(uiEnvPath) != "" {
+		args = append(args, "--env-file", strings.TrimSpace(uiEnvPath))
+	}
+	args = append(args, "--app-host", strings.TrimSpace(appHost))
+	args = append(args, "--app-port", strconv.Itoa(int(appPort)))
 	scriptURL = strings.TrimSpace(scriptURL)
 	if scriptURL == "" {
 		return ""
@@ -408,17 +238,9 @@ func buildDefaultModuleInstallCommand(
 	if len(envAssignments) > 0 {
 		sudoRunScriptCmd = "env " + strings.Join(envAssignments, " ") + " " + sudoRunScriptCmd
 	}
-	sudoPasswordB64 := ""
-	if sudoPassword != nil {
-		sudoPasswordB64 = base64.StdEncoding.EncodeToString([]byte(*sudoPassword))
-	}
-
 	installScript := strings.Join([]string{
 		"set -e",
 		"script_url=" + shellEscape(scriptURL),
-		"sudo_pw_b64=" + shellEscape(sudoPasswordB64),
-		`sudo_pw=""`,
-		`if [ -n "$sudo_pw_b64" ]; then sudo_pw="$(printf '%s' "$sudo_pw_b64" | base64 -d 2>/dev/null || true)"; fi`,
 		"tmp_script=\"$(mktemp)\"",
 		"cleanup(){ rm -f \"$tmp_script\"; }",
 		"trap cleanup EXIT",
@@ -440,8 +262,6 @@ func buildDefaultModuleInstallCommand(
 		"  " + runScriptCmd,
 		"elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then",
 		"  sudo -n " + sudoRunScriptCmd,
-		"elif command -v sudo >/dev/null 2>&1 && [ -n \"$sudo_pw\" ]; then",
-		"  printf '%s\\n' \"$sudo_pw\" | sudo -S -k -p '' " + sudoRunScriptCmd,
 		"else",
 		"  " + runScriptCmd,
 		"fi",
@@ -527,10 +347,6 @@ func ensureCurlAndCheckEndpoint(
 	}
 
 	tlsPaths := resolveModuleTLSPaths(moduleName)
-	sudoPasswordB64 := ""
-	if target.SudoPassword != nil {
-		sudoPasswordB64 = base64.StdEncoding.EncodeToString([]byte(*target.SudoPassword))
-	}
 	resolveHost := strings.TrimSpace(endpointHost(endpoint))
 	resolvePort := strings.TrimSpace(endpointPort(endpoint))
 	if resolvePort == "" {
@@ -539,9 +355,6 @@ func ensureCurlAndCheckEndpoint(
 	resolveAddr := "127.0.0.1"
 	healthScript := strings.Join([]string{
 		"set -e",
-		"sudo_pw_b64=" + shellEscape(sudoPasswordB64),
-		`sudo_pw=""`,
-		`if [ -n "$sudo_pw_b64" ]; then sudo_pw="$(printf '%s' "$sudo_pw_b64" | base64 -d 2>/dev/null || true)"; fi`,
 		"cert_path=" + shellEscape(tlsPaths.CertPath),
 		"key_path=" + shellEscape(tlsPaths.KeyPath),
 		"ca_path=" + shellEscape(tlsPaths.CAPath),
@@ -554,7 +367,6 @@ func ensureCurlAndCheckEndpoint(
 		"  path=\"$1\"",
 		"  if [ -f \"$path\" ]; then return 0; fi",
 		"  if command -v sudo >/dev/null 2>&1 && sudo -n test -f \"$path\" >/dev/null 2>&1; then return 0; fi",
-		"  if command -v sudo >/dev/null 2>&1 && [ -n \"$sudo_pw\" ]; then printf '%s\\n' \"$sudo_pw\" | sudo -S -k test -f \"$path\" >/dev/null 2>&1; return $?; fi",
 		"  return 1",
 		"}",
 		"check_file \"$cert_path\" || { echo \"missing tls cert: $cert_path\"; exit 1; }",
@@ -571,7 +383,6 @@ func ensureCurlAndCheckEndpoint(
 		"  if [ -z \"$install_cmd\" ]; then echo 'cannot install curl automatically'; return 1; fi",
 		"  if [ \"$(id -u)\" -eq 0 ]; then sh -lc \"$install_cmd\"; return $?; fi",
 		"  if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then sudo -n sh -lc \"$install_cmd\"; return $?; fi",
-		"  if command -v sudo >/dev/null 2>&1 && [ -n \"$sudo_pw\" ]; then printf '%s\\n' \"$sudo_pw\" | sudo -S -k sh -lc \"$install_cmd\"; return $?; fi",
 		"  echo 'need root/sudo to install curl'; return 1",
 		"}",
 		"ensure_curl",
@@ -638,8 +449,4 @@ func regexpEscape(raw string) string {
 		`|`, `\|`,
 	)
 	return replacer.Replace(raw)
-}
-
-func deref(v *string) string {
-	return pkgutils.DerefString(v)
 }

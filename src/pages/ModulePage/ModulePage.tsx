@@ -4,19 +4,21 @@ import { toast } from "sonner";
 
 import {
   getAgentInstallBootstrapMetadata,
+  getModuleInstallOperation,
   installModuleStream,
   listModuleInstallAgents,
   rotateAgentBootstrapToken,
   reinstallModuleCertStream,
   type AgentInstallBootstrapMetadata,
   type ModuleInstallAgent,
+  type ModuleInstallOperationSummary,
   type ModuleInstallResult,
-  type ModuleInstallScope,
   type ModuleReinstallCertResult,
 } from "@/hooks/module/use-module-install-api";
 import { useEnabledModules } from "@/state/enabled-modules-context";
 
 import { ModuleInstallDialog } from "./sections/module-install-dialog";
+import { ModuleActionConfirmDialog } from "./sections/module-action-confirm-dialog";
 import { ModuleInstallLogDialog } from "./sections/module-install-log-dialog";
 import { buildModuleStatusCards } from "./sections/module-page-mapper";
 import { ModulePageContent } from "./sections/module-page-content";
@@ -45,7 +47,6 @@ export default function ModulePage() {
   const [installTarget, setInstallTarget] = useState<ModuleStatusCard | null>(
     null,
   );
-  const [installScope] = useState<ModuleInstallScope>("remote");
   const [appHost, setAppHost] = useState("");
   const [selectedAgentID, setSelectedAgentID] = useState("");
   const [installAgents, setInstallAgents] = useState<ModuleInstallAgent[]>([]);
@@ -56,7 +57,10 @@ export default function ModulePage() {
   const [installResult, setInstallResult] = useState<
     ModuleInstallResult | ModuleReinstallCertResult | null
   >(null);
+  const [installOperationSummary, setInstallOperationSummary] = useState<ModuleInstallOperationSummary | null>(null);
   const [installError, setInstallError] = useState("");
+  const [reinstallConfirmOpen, setReinstallConfirmOpen] = useState(false);
+  const [reinstallTarget, setReinstallTarget] = useState<ModuleStatusCard | null>(null);
   const [logDialogTitle, setLogDialogTitle] = useState(
     "Module Install Logs",
   );
@@ -248,6 +252,7 @@ export default function ModulePage() {
     setLogDialogDescription("Log chi tiet theo tung stage de debug install flow.");
     setInstallRunning(true);
     setInstallResult(null);
+    setInstallOperationSummary(null);
     setInstallError("");
     setInstallLogs([]);
 
@@ -255,8 +260,6 @@ export default function ModulePage() {
       const result = await installModuleStream(
         {
           module_name: moduleName,
-          scope: installScope,
-          install_runtime: "linux",
           agent_id: selectedAgentID.trim(),
           app_host: normalizedAppHost,
         },
@@ -271,6 +274,20 @@ export default function ModulePage() {
         },
       );
       setInstallResult(result);
+      if (result.operation_id) {
+        try {
+          const operation = await getModuleInstallOperation(result.operation_id);
+          setInstallOperationSummary(operation.summary);
+        } catch (operationErr) {
+          appendInstallLog(
+            `[warn] khong the tai operation detail: ${
+              operationErr instanceof Error && operationErr.message.trim()
+                ? operationErr.message
+                : "unknown error"
+            }`,
+          );
+        }
+      }
       if (result.warnings.length > 0) {
         toast.warning(result.warnings.join(" | "));
       } else {
@@ -294,13 +311,23 @@ export default function ModulePage() {
     }
   };
 
-  const handleReinstallCert = async (item: ModuleStatusCard) => {
+  const handleRequestReinstallCert = (item: ModuleStatusCard) => {
+    setReinstallTarget(item);
+    setReinstallConfirmOpen(true);
+  };
+
+  const handleReinstallCert = async () => {
+    const item = reinstallTarget;
+    if (!item) {
+      return;
+    }
     const moduleName = item.sourceName || item.moduleKey;
     if (!moduleName.trim()) {
       toast.error("module name khong hop le");
       return;
     }
 
+    setReinstallConfirmOpen(false);
     setInstallDialogOpen(false);
     setInstallSubmitting(false);
     setInstallLogDialogOpen(true);
@@ -310,6 +337,7 @@ export default function ModulePage() {
     );
     setInstallRunning(true);
     setInstallResult(null);
+    setInstallOperationSummary(null);
     setInstallError("");
     setInstallLogs([]);
 
@@ -350,6 +378,7 @@ export default function ModulePage() {
       toast.error(message);
     } finally {
       setInstallRunning(false);
+      setReinstallTarget(null);
     }
   };
 
@@ -379,7 +408,7 @@ export default function ModulePage() {
           void handleRotateAgentBootstrapToken();
         }}
         onInstall={openInstallDialog}
-        onReinstallCert={handleReinstallCert}
+        onReinstallCert={handleRequestReinstallCert}
         actionRunning={installRunning || installSubmitting}
       />
 
@@ -402,10 +431,27 @@ export default function ModulePage() {
         running={installRunning}
         logs={installLogs}
         result={installResult}
+        operationSummary={installOperationSummary}
         errorMessage={installError}
         title={logDialogTitle}
         description={logDialogDescription}
         onOpenChange={setInstallLogDialogOpen}
+      />
+
+      <ModuleActionConfirmDialog
+        open={reinstallConfirmOpen}
+        title="Reinstall Service Certificate"
+        description={
+          reinstallTarget
+            ? `Service ${reinstallTarget.label} sẽ được ghi đè lại cert/key hiện tại rồi healthcheck lại ngay sau đó. Chỉ tiếp tục khi bạn chắc target đang đúng.`
+            : "Xác nhận hành động phá hoại."
+        }
+        confirmLabel="Reinstall Cert"
+        running={installRunning}
+        onOpenChange={setReinstallConfirmOpen}
+        onConfirm={() => {
+          void handleReinstallCert();
+        }}
       />
     </main>
   );
