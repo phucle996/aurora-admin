@@ -60,6 +60,19 @@ func (s *ModuleInstallService) installModuleViaAgentBundle(
 
 	callCtx, cancel := context.WithTimeout(ctx, installCommandTimeout+10*time.Second)
 	defer cancel()
+	env := map[string]string{
+		"ADMIN_RPC_ENDPOINT": strings.TrimSpace(adminRPCEndpoint),
+	}
+	if moduleUsesClientCSRBootstrap(moduleName) {
+		if s == nil || s.moduleBootstrapTokenIssuer == nil {
+			return nil, nil, fmt.Errorf("module bootstrap token issuer is unavailable for module %s", canonicalModuleName(moduleName))
+		}
+		token, err := s.moduleBootstrapTokenIssuer.IssueModuleBootstrapToken(callCtx, moduleName)
+		if err != nil {
+			return nil, nil, fmt.Errorf("issue module bootstrap token failed: %w", err)
+		}
+		env["ADMIN_RPC_BOOTSTRAP_TOKEN"] = strings.TrimSpace(token)
+	}
 	agentReq := agentInstallModuleRequest{
 		APIVersion:       installerRPCVersionV1,
 		RequestID:        newAgentOperationRequestID("install", moduleName),
@@ -69,9 +82,7 @@ func (s *ModuleInstallService) installModuleViaAgentBundle(
 		ArtifactChecksum: release.ArtifactChecksum,
 		AppHost:          strings.TrimSpace(appHost),
 		AppPort:          appPort,
-		Env: map[string]string{
-			"ADMIN_RPC_ENDPOINT": strings.TrimSpace(adminRPCEndpoint),
-		},
+		Env:              env,
 	}
 	var (
 		res *agentInstallModuleResponse

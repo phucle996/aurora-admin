@@ -52,6 +52,10 @@ type hostsEntry struct {
 	Host    string
 }
 
+type moduleBootstrapTokenIssuer interface {
+	IssueModuleBootstrapToken(context.Context, string) (string, error)
+}
+
 type ModuleInstallService struct {
 	endpointRepo    repository.EndpointRepository
 	runtimeRepo     runtimerepo.RuntimeConfigRepository
@@ -63,7 +67,8 @@ type ModuleInstallService struct {
 	agentRPCClientCertPath string
 	agentRPCClientKeyPath  string
 
-	uiLegacyInstallScriptURL string
+	moduleBootstrapTokenIssuer moduleBootstrapTokenIssuer
+	uiLegacyInstallScriptURL   string
 }
 
 type InstallLogFn func(stage, message string)
@@ -77,18 +82,20 @@ func NewModuleInstallService(
 	agentRPCCAPath string,
 	agentRPCClientCertPath string,
 	agentRPCClientKeyPath string,
+	moduleBootstrapTokenIssuer moduleBootstrapTokenIssuer,
 	uiLegacyInstallScriptURL string,
 ) *ModuleInstallService {
 	svc := &ModuleInstallService{
-		endpointRepo:             endpointRepo,
-		runtimeRepo:              runtimeRepo,
-		certStoreRepo:            certStoreRepo,
-		certStorePrefix:          strings.TrimSpace(certStorePrefix),
-		databaseURL:              strings.TrimSpace(databaseURL),
-		agentRPCCAPath:           strings.TrimSpace(agentRPCCAPath),
-		agentRPCClientCertPath:   strings.TrimSpace(agentRPCClientCertPath),
-		agentRPCClientKeyPath:    strings.TrimSpace(agentRPCClientKeyPath),
-		uiLegacyInstallScriptURL: strings.TrimSpace(uiLegacyInstallScriptURL),
+		endpointRepo:               endpointRepo,
+		runtimeRepo:                runtimeRepo,
+		certStoreRepo:              certStoreRepo,
+		certStorePrefix:            strings.TrimSpace(certStorePrefix),
+		databaseURL:                strings.TrimSpace(databaseURL),
+		agentRPCCAPath:             strings.TrimSpace(agentRPCCAPath),
+		agentRPCClientCertPath:     strings.TrimSpace(agentRPCClientCertPath),
+		agentRPCClientKeyPath:      strings.TrimSpace(agentRPCClientKeyPath),
+		moduleBootstrapTokenIssuer: moduleBootstrapTokenIssuer,
+		uiLegacyInstallScriptURL:   strings.TrimSpace(uiLegacyInstallScriptURL),
 	}
 	configureAgentRPCDialTLS(svc.agentRPCCAPath, svc.agentRPCClientCertPath, svc.agentRPCClientKeyPath)
 	return svc

@@ -3,6 +3,7 @@ package app
 import (
 	sharedrepo "admin/internal/repository"
 	runtimerepo "admin/internal/runtime/repository"
+	runtimesvc "admin/internal/runtime/service"
 	"context"
 )
 
@@ -58,4 +59,29 @@ func (a *runtimeCertStoreRepositoryAdapter) GetMany(ctx context.Context, keys []
 		return map[string]string{}, nil
 	}
 	return a.repo.GetMany(ctx, keys)
+}
+
+type moduleBootstrapTokenIssuerAdapter struct {
+	svc *runtimesvc.RuntimeBootstrapService
+}
+
+func newModuleBootstrapTokenIssuer(svc *runtimesvc.RuntimeBootstrapService) *moduleBootstrapTokenIssuerAdapter {
+	if svc == nil {
+		return nil
+	}
+	return &moduleBootstrapTokenIssuerAdapter{svc: svc}
+}
+
+func (a *moduleBootstrapTokenIssuerAdapter) IssueModuleBootstrapToken(ctx context.Context, moduleName string) (string, error) {
+	if a == nil || a.svc == nil {
+		return "", nil
+	}
+	result, err := a.svc.IssueModuleBootstrapToken(ctx, moduleName)
+	if err != nil {
+		return "", err
+	}
+	if result == nil {
+		return "", nil
+	}
+	return result.Token, nil
 }

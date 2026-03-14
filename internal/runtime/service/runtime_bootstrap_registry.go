@@ -23,6 +23,45 @@ type structuredBootstrapField struct {
 	Required   bool
 }
 
+var structuredBootstrapGroupRegistry = map[string][]string{
+	"app": {
+		"app.timezone",
+		"app.log_level",
+		"app.port",
+	},
+	"psql": {
+		"psql.url",
+		"psql.ssl_mode",
+		"psql.schema",
+	},
+	"redis": {
+		"redis.addr",
+		"redis.username",
+		"redis.password",
+		"redis.db",
+		"redis.use_tls",
+		"redis.ca",
+		"redis.client_key",
+		"redis.client_cert",
+		"redis.insecure_skip_verify",
+	},
+	"token": {
+		"token.access_ttl",
+		"token.refresh_ttl",
+		"token.device_ttl",
+		"token.ott_ttl",
+	},
+	"tls": {
+		"tls.ca_pem",
+		"tls.client_cert_pem",
+		"tls.client_key_pem",
+	},
+	"platform": {
+		"platform.kubeconfig_cipher_key",
+		"platform.grpc_endpoint",
+	},
+}
+
 var structuredBootstrapFieldRegistry = map[string]structuredBootstrapField{
 	"app.timezone": {
 		OutputPath: "app.timezone",
@@ -185,15 +224,20 @@ func (s *RuntimeBootstrapService) BuildStructuredRuntimeConfig(
 		return nil, fmt.Errorf("config_keys is required")
 	}
 
-	fields := make([]structuredBootstrapField, 0, len(req.ConfigKeys))
-	seenKeys := make(map[string]struct{}, len(req.ConfigKeys))
-	runtimeKeys := make([]string, 0, len(req.ConfigKeys))
-	seenRuntimeKeys := make(map[string]struct{}, len(req.ConfigKeys))
+	resolvedKeys, err := expandStructuredBootstrapKeys(req.ConfigKeys)
+	if err != nil {
+		return nil, err
+	}
+
+	fields := make([]structuredBootstrapField, 0, len(resolvedKeys))
+	seenKeys := make(map[string]struct{}, len(resolvedKeys))
+	runtimeKeys := make([]string, 0, len(resolvedKeys))
+	seenRuntimeKeys := make(map[string]struct{}, len(resolvedKeys))
 	endpointModules := make(map[string]struct{})
 	needsTLS := false
 	needsAppPort := false
 
-	for _, rawKey := range req.ConfigKeys {
+	for _, rawKey := range resolvedKeys {
 		key := strings.TrimSpace(rawKey)
 		if key == "" {
 			continue
@@ -320,6 +364,43 @@ func resolveBootstrapStoreKey(raw string, moduleName string) string {
 		return ""
 	}
 	return strings.ReplaceAll(value, "{module}", normalizeBootstrapModuleName(moduleName))
+}
+
+func expandStructuredBootstrapKeys(configKeys []string) ([]string, error) {
+	if len(configKeys) == 0 {
+		return nil, fmt.Errorf("config_keys is required")
+	}
+
+	out := make([]string, 0, len(configKeys))
+	seen := make(map[string]struct{}, len(configKeys))
+	for _, raw := range configKeys {
+		key := strings.TrimSpace(raw)
+		if key == "" {
+			continue
+		}
+		groupItems, isGroup := structuredBootstrapGroupRegistry[key]
+		if !isGroup {
+			return nil, fmt.Errorf("unsupported config group: %s", key)
+		}
+		for _, item := range groupItems {
+			fieldKey := strings.TrimSpace(item)
+			if fieldKey == "" {
+				continue
+			}
+			if _, ok := structuredBootstrapFieldRegistry[fieldKey]; !ok {
+				return nil, fmt.Errorf("unsupported config key: %s", fieldKey)
+			}
+			if _, exists := seen[fieldKey]; exists {
+				continue
+			}
+			seen[fieldKey] = struct{}{}
+			out = append(out, fieldKey)
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("config_keys is required")
+	}
+	return out, nil
 }
 
 func setStructuredRuntimeValue(target map[string]any, path string, value any) {

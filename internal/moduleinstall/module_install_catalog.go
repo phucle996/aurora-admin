@@ -181,6 +181,10 @@ func moduleRequiresAdminRPC(moduleName string) bool {
 	return ok && definition.RequireAdminRPC
 }
 
+func moduleUsesClientCSRBootstrap(moduleName string) bool {
+	return canonicalModuleName(moduleName) == "ums"
+}
+
 func moduleArtifactSourceFor(moduleName string) (moduleArtifactSource, bool) {
 	definition, ok := moduleDefinitionByName[canonicalModuleName(moduleName)]
 	if !ok || definition.ArtifactSource == nil {

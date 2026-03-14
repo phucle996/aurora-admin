@@ -124,6 +124,16 @@ func NewModules(
 	runtimeEndpointRepo := newRuntimeEndpointRepository(enabledModuleRepo)
 	runtimeCertStoreRepo := newRuntimeCertStoreRepository(certStoreRepo)
 	enabledModuleSvc := apisvc.NewEnabledModuleService(enabledModuleRepo)
+	runtimeSvc := runtimesvc.NewRuntimeBootstrapService(
+		runtimeRepo,
+		runtimeEndpointRepo,
+		runtimeCertStoreRepo,
+		cfg.CertStore.Prefix,
+		cfg.App.TLSCA,
+		cfg.App.TLSCAKey,
+		cfg.AgentMTLS.CACert,
+		cfg.AgentMTLS.CAKey,
+	)
 	moduleInstallSvc := installsvc.NewModuleInstallService(
 		enabledModuleRepo,
 		runtimeRepo,
@@ -133,16 +143,8 @@ func NewModules(
 		cfg.AgentMTLS.CACert,
 		cfg.AgentMTLS.AdminClientCert,
 		cfg.AgentMTLS.AdminClientKey,
+		newModuleBootstrapTokenIssuer(runtimeSvc),
 		cfg.ModuleInstall.UILegacyInstallScriptURL,
-	)
-	runtimeSvc := runtimesvc.NewRuntimeBootstrapService(
-		runtimeRepo,
-		runtimeEndpointRepo,
-		runtimeCertStoreRepo,
-		cfg.CertStore.Prefix,
-		cfg.App.TLSCA,
-		cfg.AgentMTLS.CACert,
-		cfg.AgentMTLS.CAKey,
 	)
 	if err := runtimeSvc.SeedControlPlaneTrustStore(ctx, runtimesvc.ControlPlaneTrustSeedInput{
 		AdminCACertPath:           cfg.App.TLSCA,

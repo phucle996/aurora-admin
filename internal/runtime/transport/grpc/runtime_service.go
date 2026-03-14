@@ -14,6 +14,7 @@ import (
 const (
 	runtimeServiceName               = "admin.transport.runtime.v1.RuntimeService"
 	runtimeGetRuntimeBootstrapMethod = "GetRuntimeBootstrap"
+	runtimeBootstrapModuleMethod     = "BootstrapModuleClient"
 	runtimeBootstrapAgentMethod      = "BootstrapAgent"
 	runtimeRenewAgentCertMethod      = "RenewAgentCertificate"
 	runtimeReportAgentMethod         = "ReportAgentHeartbeat"
@@ -21,6 +22,7 @@ const (
 	runtimeReportAgentMetrics        = "ReportAgentMetrics"
 	runtimeGetHostRoutingSnapshot    = "GetHostRoutingSnapshot"
 	runtimeGetRuntimeBootstrapPath   = "/" + runtimeServiceName + "/" + runtimeGetRuntimeBootstrapMethod
+	runtimeBootstrapModulePath       = "/" + runtimeServiceName + "/" + runtimeBootstrapModuleMethod
 	runtimeBootstrapAgentPath        = "/" + runtimeServiceName + "/" + runtimeBootstrapAgentMethod
 	runtimeRenewAgentCertPath        = "/" + runtimeServiceName + "/" + runtimeRenewAgentCertMethod
 	runtimeReportAgentPath           = "/" + runtimeServiceName + "/" + runtimeReportAgentMethod
@@ -35,6 +37,7 @@ type RuntimeTransportService struct {
 
 type runtimeTransportServer interface {
 	GetRuntimeBootstrap(context.Context, *structpb.Struct) (*structpb.Struct, error)
+	BootstrapModuleClient(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	BootstrapAgent(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	RenewAgentCertificate(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	ReportAgentHeartbeat(context.Context, *structpb.Struct) (*structpb.Struct, error)
@@ -101,6 +104,10 @@ func RegisterRuntimeTransportServer(server *gogrpc.Server, svc *RuntimeTransport
 			{
 				MethodName: runtimeGetRuntimeBootstrapMethod,
 				Handler:    runtimeGetRuntimeBootstrapHandler,
+			},
+			{
+				MethodName: runtimeBootstrapModuleMethod,
+				Handler:    runtimeBootstrapModuleHandler,
 			},
 			{
 				MethodName: runtimeBootstrapAgentMethod,
@@ -204,6 +211,7 @@ func isRuntimeBootstrapRequestError(err error) bool {
 	return strings.Contains(msg, "module_name is required") ||
 		strings.Contains(msg, "config_keys is required") ||
 		strings.Contains(msg, "unsupported config key") ||
+		strings.Contains(msg, "unsupported config group") ||
 		strings.Contains(msg, "app_port is invalid")
 }
 

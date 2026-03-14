@@ -23,6 +23,7 @@ type RuntimeConfigRepository interface {
 	RevokeLease(ctx context.Context, leaseID clientv3.LeaseID) error
 	Delete(ctx context.Context, key string) error
 	ConsumeBootstrapTokenTx(ctx context.Context, rawToken string, expectedCluster string, now time.Time) (*BootstrapTokenConsumeResult, error)
+	ConsumeModuleBootstrapTokenTx(ctx context.Context, rawToken string, expectedModule string, now time.Time) (*ModuleBootstrapTokenConsumeResult, error)
 }
 
 type RuntimeConfigKV struct {
@@ -42,6 +43,21 @@ type BootstrapTokenRecord struct {
 type BootstrapTokenConsumeResult struct {
 	Key      string
 	Record   BootstrapTokenRecord
+	Consumed bool
+}
+
+type ModuleBootstrapTokenRecord struct {
+	TokenHash   string `json:"token_hash"`
+	ModuleScope string `json:"module_scope"`
+	IssuedAt    string `json:"issued_at"`
+	ExpiresAt   string `json:"expires_at"`
+	UsedAt      string `json:"used_at"`
+	MaxUse      int    `json:"max_use"`
+}
+
+type ModuleBootstrapTokenConsumeResult struct {
+	Key      string
+	Record   ModuleBootstrapTokenRecord
 	Consumed bool
 }
 
@@ -343,6 +359,101 @@ func (r *EtcdRuntimeConfigRepository) ConsumeBootstrapTokenTx(
 		return nil, nil
 	}
 	return &BootstrapTokenConsumeResult{
+		Key:      tokenKey,
+		Record:   record,
+		Consumed: true,
+	}, nil
+}
+
+func (r *EtcdRuntimeConfigRepository) ConsumeModuleBootstrapTokenTx(
+	ctx context.Context,
+	rawToken string,
+	expectedModule string,
+	now time.Time,
+) (*ModuleBootstrapTokenConsumeResult, error) {
+	if r == nil || r.etcd == nil {
+		return nil, errorvar.ErrRuntimeConfigRepositoryNil
+	}
+	token := strings.TrimSpace(rawToken)
+	if token == "" {
+		return nil, errorvar.ErrRuntimeConfigKeyInvalid
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	sum := sha256.Sum256([]byte(token))
+	hash := hex.EncodeToString(sum[:])
+	tokenKey := keycfg.RuntimeModuleBootstrapTokenKey(hash)
+	_, fullTokenKey, err := r.buildFullKey(tokenKey)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := r.etcd.Get(ctx, fullTokenKey)
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Kvs) == 0 {
+		return nil, nil
+	}
+	kv := resp.Kvs[0]
+	if kv == nil {
+		return nil, nil
+	}
+
+	var record ModuleBootstrapTokenRecord
+	if err := json.Unmarshal(kv.Value, &record); err != nil {
+		return nil, err
+	}
+	record.TokenHash = strings.TrimSpace(record.TokenHash)
+	record.ModuleScope = strings.TrimSpace(record.ModuleScope)
+	record.IssuedAt = strings.TrimSpace(record.IssuedAt)
+	record.ExpiresAt = strings.TrimSpace(record.ExpiresAt)
+	record.UsedAt = strings.TrimSpace(record.UsedAt)
+	if record.TokenHash != "" && record.TokenHash != hash {
+		return nil, nil
+	}
+	if record.MaxUse <= 0 {
+		record.MaxUse = 1
+	}
+	moduleScope := strings.TrimSpace(record.ModuleScope)
+	moduleName := strings.TrimSpace(expectedModule)
+	if moduleScope == "" || moduleName == "" {
+		return nil, nil
+	}
+	if !strings.EqualFold(moduleScope, moduleName) {
+		return nil, nil
+	}
+
+	expiresAt, err := time.Parse(time.RFC3339Nano, record.ExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	if now.UTC().After(expiresAt.UTC()) {
+		return nil, nil
+	}
+	if record.MaxUse <= 1 && record.UsedAt != "" {
+		return nil, nil
+	}
+
+	record.UsedAt = now.UTC().Format(time.RFC3339Nano)
+	updated, err := json.Marshal(record)
+	if err != nil {
+		return nil, err
+	}
+
+	txnResp, err := r.etcd.Txn(ctx).
+		If(clientv3.Compare(clientv3.ModRevision(fullTokenKey), "=", kv.ModRevision)).
+		Then(clientv3.OpPut(fullTokenKey, strings.TrimSpace(string(updated)))).
+		Commit()
+	if err != nil {
+		return nil, err
+	}
+	if !txnResp.Succeeded {
+		return nil, nil
+	}
+	return &ModuleBootstrapTokenConsumeResult{
 		Key:      tokenKey,
 		Record:   record,
 		Consumed: true,

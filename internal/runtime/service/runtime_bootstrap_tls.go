@@ -31,6 +31,10 @@ func runtimeBootstrapTLSStoreKey(prefix string, objectID uuid.UUID, certType str
 	return base + "/" + key
 }
 
+func runtimeBootstrapClientCertStoreKey(prefix string, moduleName string) string {
+	return runtimeBootstrapTLSStoreKey(prefix, runtimeBootstrapTLSObjectID(moduleName), "bootstrap_client_cert")
+}
+
 func (s *RuntimeBootstrapService) loadModuleTLSBundle(ctx context.Context, moduleName string) (map[string]string, error) {
 	if s == nil || s.certStoreRepo == nil {
 		return nil, fmt.Errorf("cert store repository is nil")
@@ -71,13 +75,17 @@ func (s *RuntimeBootstrapService) AuthorizeBootstrapClient(
 	}
 
 	objectID := runtimeBootstrapTLSObjectID(name)
+	bootstrapClientCertKey := runtimeBootstrapClientCertStoreKey(s.certStorePrefix, name)
 	clientCertKey := runtimeBootstrapTLSStoreKey(s.certStorePrefix, objectID, "client_cert")
-	loaded, err := s.certStoreRepo.GetMany(ctx, []string{clientCertKey})
+	loaded, err := s.certStoreRepo.GetMany(ctx, []string{bootstrapClientCertKey, clientCertKey})
 	if err != nil {
 		return fmt.Errorf("load cert store keys failed: %w", err)
 	}
 
-	expectedPEM := strings.TrimSpace(loaded[clientCertKey])
+	expectedPEM := strings.TrimSpace(loaded[bootstrapClientCertKey])
+	if expectedPEM == "" {
+		expectedPEM = strings.TrimSpace(loaded[clientCertKey])
+	}
 	if expectedPEM == "" {
 		return fmt.Errorf("client certificate not found for module %s", name)
 	}

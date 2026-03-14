@@ -17,18 +17,19 @@ const (
 	TokenSecretLegacyPrefix = "/aurora/token-secret"
 	CertStorePrefix         = "/cert-store"
 
-	RuntimeSchemaPrefix              = "/runtime/postgresql/schema"
-	RuntimeAppPortPrefix             = "/runtime/app/port"
-	RuntimeHostsPrefix               = "/runtime/hosts"
-	RuntimeAgentPrefix               = "/runtime/agent/nodes"
-	RuntimeAgentBootstrapTokenPrefix = "/runtime/agent/bootstrap_tokens"
-	RuntimeAgentCSRPrefix            = "/runtime/agent/csr_requests"
-	RuntimeAgentAuditPrefix          = "/runtime/agent/audit"
-	RuntimeAgentRevocationPrefix     = "/runtime/agent/revocations"
-	RuntimeInstallOperationPrefix    = "/runtime/install/operations"
-	RegistryAgentPrefix              = "/registry/agents"
-	RuntimeInstallDesiredPrefix      = "/runtime/install/desired"
-	RegistryModulesPrefix            = "/registry/modules"
+	RuntimeSchemaPrefix               = "/runtime/postgresql/schema"
+	RuntimeAppPortPrefix              = "/runtime/app/port"
+	RuntimeHostsPrefix                = "/runtime/hosts"
+	RuntimeAgentPrefix                = "/runtime/agent/nodes"
+	RuntimeAgentBootstrapTokenPrefix  = "/runtime/agent/bootstrap_tokens"
+	RuntimeModuleBootstrapTokenPrefix = "/runtime/module/bootstrap_tokens"
+	RuntimeAgentCSRPrefix             = "/runtime/agent/csr_requests"
+	RuntimeAgentAuditPrefix           = "/runtime/agent/audit"
+	RuntimeAgentRevocationPrefix      = "/runtime/agent/revocations"
+	RuntimeInstallOperationPrefix     = "/runtime/install/operations"
+	RegistryAgentPrefix               = "/registry/agents"
+	RuntimeInstallDesiredPrefix       = "/runtime/install/desired"
+	RegistryModulesPrefix             = "/registry/modules"
 
 	APIKeyCurrentVersionPath       = "/apikey/current_version"
 	APIKeyCurrentRotatedAtPath     = "/apikey/current_rotated_at"
@@ -98,6 +99,14 @@ func RuntimeAgentBootstrapTokenKey(tokenHash string) string {
 		return RuntimeAgentBootstrapTokenPrefix
 	}
 	return RuntimeAgentBootstrapTokenPrefix + "/" + hash
+}
+
+func RuntimeModuleBootstrapTokenKey(tokenHash string) string {
+	hash := strings.Trim(strings.TrimSpace(tokenHash), "/")
+	if hash == "" {
+		return RuntimeModuleBootstrapTokenPrefix
+	}
+	return RuntimeModuleBootstrapTokenPrefix + "/" + hash
 }
 
 func RuntimeAgentRevocationKey(serialHex string) string {

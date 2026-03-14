@@ -61,6 +61,32 @@ func runtimeBootstrapAgentHandler(
 	return interceptor(ctx, in, info, handler)
 }
 
+func runtimeBootstrapModuleHandler(
+	srv interface{},
+	ctx context.Context,
+	dec func(interface{}) error,
+	interceptor gogrpc.UnaryServerInterceptor,
+) (interface{}, error) {
+	in := &structpb.Struct{}
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+
+	base := srv.(*RuntimeTransportService)
+	if interceptor == nil {
+		return base.BootstrapModuleClient(ctx, in)
+	}
+
+	info := &gogrpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: runtimeBootstrapModulePath,
+	}
+	handler := func(currentCtx context.Context, req interface{}) (interface{}, error) {
+		return base.BootstrapModuleClient(currentCtx, req.(*structpb.Struct))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func runtimeRenewAgentCertHandler(
 	srv interface{},
 	ctx context.Context,

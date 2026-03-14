@@ -66,6 +66,47 @@ func (s *RuntimeTransportService) BootstrapAgent(
 	return res, nil
 }
 
+func (s *RuntimeTransportService) BootstrapModuleClient(
+	ctx context.Context,
+	req *structpb.Struct,
+) (*structpb.Struct, error) {
+	if s == nil || s.runtimeSvc == nil {
+		return nil, status.Error(codes.Unavailable, "runtime bootstrap service unavailable")
+	}
+
+	result, err := s.runtimeSvc.BootstrapModuleClient(ctx, runtimesvc.ModuleClientBootstrapRequest{
+		ModuleName:     readStructString(req, "module_name"),
+		BootstrapToken: readStructString(req, "bootstrap_token"),
+		CSRPEM:         readStructString(req, "csr_pem"),
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, runtimesvc.ErrAgentBootstrapTokenInvalid):
+			return nil, status.Error(codes.PermissionDenied, "invalid bootstrap token")
+		case errors.Is(err, runtimesvc.ErrAgentCSRInvalid):
+			return nil, status.Error(codes.InvalidArgument, "invalid csr")
+		case isAgentBootstrapValidationError(err):
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		default:
+			logger.SysError("runtime.bootstrap_module_client", err, "bootstrap module client failed")
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+	}
+
+	res, encodeErr := structpb.NewStruct(map[string]any{
+		"ok":                  true,
+		"client_cert_pem":     result.ClientCertPEM,
+		"admin_server_ca_pem": result.AdminServerCAPEM,
+		"ca_cert_pem":         result.AdminServerCAPEM,
+		"serial_hex":          result.SerialHex,
+		"expires_at":          result.ExpiresAt.UTC().Format(time.RFC3339Nano),
+	})
+	if encodeErr != nil {
+		return nil, status.Error(codes.Internal, "failed to build grpc response payload")
+	}
+	return res, nil
+}
+
 func (s *RuntimeTransportService) RenewAgentCertificate(
 	ctx context.Context,
 	req *structpb.Struct,

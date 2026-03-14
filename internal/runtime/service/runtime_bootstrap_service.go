@@ -78,6 +78,23 @@ type AgentBootstrapTokenResult struct {
 	ClusterPolicy string
 }
 
+type ModuleBootstrapTokenResult struct {
+	Token string
+}
+
+type ModuleClientBootstrapRequest struct {
+	ModuleName     string
+	BootstrapToken string
+	CSRPEM         string
+}
+
+type ModuleClientBootstrapResult struct {
+	ClientCertPEM    string
+	AdminServerCAPEM string
+	SerialHex        string
+	ExpiresAt        time.Time
+}
+
 var (
 	ErrAgentBootstrapTokenInvalid = errors.New("agent bootstrap token invalid")
 	ErrAgentCSRInvalid            = errors.New("agent csr invalid")
@@ -89,6 +106,7 @@ type RuntimeBootstrapService struct {
 	certStoreRepo   runtimerepo.CertStoreRepository
 	certStorePrefix string
 	adminCACertPath string
+	adminCAKeyPath  string
 	agentCACertPath string
 	agentCAKeyPath  string
 	agentCertTTL    time.Duration
@@ -105,6 +123,7 @@ func NewRuntimeBootstrapService(
 	certStoreRepo runtimerepo.CertStoreRepository,
 	certStorePrefix string,
 	adminCACertPath string,
+	adminCAKeyPath string,
 	agentCACertPath string,
 	agentCAKeyPath string,
 ) *RuntimeBootstrapService {
@@ -114,6 +133,7 @@ func NewRuntimeBootstrapService(
 		certStoreRepo:   certStoreRepo,
 		certStorePrefix: strings.TrimSpace(certStorePrefix),
 		adminCACertPath: strings.TrimSpace(adminCACertPath),
+		adminCAKeyPath:  strings.TrimSpace(adminCAKeyPath),
 		agentCACertPath: strings.TrimSpace(agentCACertPath),
 		agentCAKeyPath:  strings.TrimSpace(agentCAKeyPath),
 		agentCertTTL:    30 * 24 * time.Hour,
